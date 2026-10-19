@@ -205,9 +205,9 @@ passes, cache status, checkpoint bytes, and phase timings. Readout requests expo
 checkpoint LRU (`--readout-cache-entries`, `--readout-cache-bytes`) through
 `usage.readout`.
 
-### Parrot / 复读机 mode
+### Parrot mode
 
-`mode: "parrot"` (alias `"复读机"`) is a type-free token-level PCD prototype.
+`mode: "parrot"` is a type-free token-level PCD prototype.
 It creates one field per token with choices `copy` / `REDACTED`, merges
 consecutive redacted tokens, and returns type `"redacted"`. `types` is optional
 and ignored; the text must be tokenizer-reconstructible and at most 256 tokens.
@@ -335,7 +335,7 @@ The test script starts and stops its own server on a random port. It covers:
 - exact medical and contact outputs;
 - NIST regex fast path (SSN, ITIN, EIN, payment card, IBAN, IPv6, date of birth) with zero decodes;
 - readout and PCD prefix-checkpoint cache hits;
-- parrot/复读机 mode plumbing;
+- parrot mode plumbing;
 - `redact` flip;
 - equal-length and typed masking;
 - auto redaction;
