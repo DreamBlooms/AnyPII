@@ -1,0 +1,23 @@
+AnyPII
+Copyright 2026 AnyPII contributors.
+
+AnyPII is an independent C++ implementation of policy-driven PII redaction.
+The prompt layout and logit-readout architecture are inspired by the System One
+line of work:
+
+  ifreflex.cpp - https://github.com/DreamBlooms/ifreflex.cpp (MIT)
+  reflex       - https://github.com/kshetrajna12/reflex (MIT)
+  SemIf-OpenJev- https://github.com/TheoLeeCJ/SemIf-OpenJev (MIT)
+
+No source code from those projects is linked into AnyPII.
+
+Third-party components:
+
+  llama.cpp     - https://github.com/ggml-org/llama.cpp (MIT)
+  cpp-httplib   - https://github.com/yhirose/cpp-httplib (MIT)
+  nlohmann/json - https://github.com/nlohmann/json (MIT)
+
+The default model is Qwen3.5-0.8B, developed by the Qwen team at Alibaba Cloud.
+Model weights are separate artifacts with their own terms and are not
+distributed with this repository. Reference names do not imply endorsement by
+their authors.

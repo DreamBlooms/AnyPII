@@ -1,0 +1,22 @@
+{
+  "state": {
+    "text": "联系人手机 13800138000，邮箱 alice@example.com；工单 TCK-2024-0912 已受理。",
+    "policy": "打码手机号和邮箱；保留工单号。"
+  },
+  "types": {
+    "phone": {
+      "description": "手机号码、联系电话。",
+      "redact": true
+    },
+    "email": {
+      "description": "电子邮箱地址。",
+      "redact": true
+    },
+    "ticket_id": {
+      "description": "工单号、票据编号，例如 TCK-2024-001。",
+      "redact": false
+    }
+  },
+  "threshold": 0.55,
+  "mask_style": "token"
+}

@@ -1,0 +1,15 @@
+{
+  "state": {
+    "text": "Alice Johnson works at Acme Corp. Email alice.johnson@acme.com, phone +1 415-555-0132. Order ORD-77821 should stay.",
+    "policy": "Redact personal names, company names, emails, and phone numbers; keep order IDs."
+  },
+  "types": {
+    "person_name": {"description": "person name", "redact": true},
+    "company": {"description": "company or organization name", "redact": true},
+    "email": {"description": "email address", "redact": true},
+    "phone": {"description": "telephone number", "redact": true},
+    "order_id": {"description": "order identifier, e.g. ORD-77821", "redact": false}
+  },
+  "threshold": 0.55,
+  "mask_style": "token"
+}

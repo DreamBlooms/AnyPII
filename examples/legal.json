@@ -1,0 +1,13 @@
+{
+  "state": {
+    "text": "原告：北京星河科技有限公司；被告：李四；案号（2024）京0105民初1234号。",
+    "policy": "公司名保留；自然人姓名打码；案号保留。"
+  },
+  "types": {
+    "company": {"description": "公司、企业名称。", "redact": false},
+    "person": {"description": "自然人姓名。", "redact": true},
+    "case_number": {"description": "案号、案件编号，例如（2024）京0105民初1234号。", "redact": false}
+  },
+  "threshold": 0.55,
+  "mask_style": "token"
+}

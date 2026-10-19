@@ -1,0 +1,15 @@
+{
+  "state": {
+    "text": "员工张伟（工号 E1024）的身份证号 110101199001011234，银行卡 6222020200112233445，邮箱 zhang.wei@corp.com。",
+    "policy": "打码身份证号、银行卡号、邮箱；保留员工姓名和工号。"
+  },
+  "types": {
+    "employee_name": {"description": "员工姓名。", "redact": false},
+    "employee_id": {"description": "员工工号，例如 E1024。", "redact": false},
+    "national_id": {"description": "18位身份证号。", "redact": true},
+    "bank_card": {"description": "16-19位银行卡号。", "redact": true},
+    "email": {"description": "电子邮箱地址。", "redact": true}
+  },
+  "threshold": 0.50,
+  "mask_style": "token"
+}

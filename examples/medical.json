@@ -1,0 +1,30 @@
+{
+  "state": {
+    "text": "患者李小明因肺炎入院。主治医师王芳、责任护士赵敏。予阿莫西林（商品名阿莫仙，辉瑞制药）抗感染。",
+    "policy": "打码患者姓名；不要打码医生与护士姓名；打码药厂名、药物品牌名与商品名；保留药品通用名。"
+  },
+  "types": {
+    "patient_name": {
+      "description": "患者或患儿的姓名，不是医务人员。",
+      "redact": true
+    },
+    "clinician_name": {
+      "description": "医生、护士、药师等医务人员姓名。",
+      "redact": false
+    },
+    "pharma_company": {
+      "description": "药厂、制药企业名称。",
+      "redact": true
+    },
+    "drug_brand": {
+      "description": "药品品牌名、商品名、商标名。",
+      "redact": true
+    },
+    "drug_generic": {
+      "description": "药品通用名、成分名、INN。",
+      "redact": false
+    }
+  },
+  "threshold": 0.55,
+  "mask_style": "token"
+}
