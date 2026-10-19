@@ -64,7 +64,8 @@ curl -s http://127.0.0.1:8080/v1/anypii \
   "model": "qwen35 0.8B Q8_0",
   "backend": "qwen35 0.8B Q8_0 / llama.cpp CPU",
   "usage": {"decodes": 6, "branches": 20, "generated_tokens": 0, "fallback": false,
-            "readout": {"cache_status": "miss", "cache_entries": 1, "checkpoint_bytes": 23637148}}
+            "readout": {"cache_status": "miss", "cache_entries": 1, "checkpoint_bytes": 23637148},
+            "result_cache": {"status": "miss", "entries": 1}}
 }
 ```
 
@@ -206,6 +207,15 @@ Customize the set at startup:
 `ANYPPI_WEAK_POS` and `ANYPPI_WEAK_POS_OVERRIDE` provide the same values via
 environment variables.
 
+## Result cache
+
+Identical requests return a cached response without running any decodes. The
+key includes the model name, text, policy, ordered type definitions, threshold,
+`mask_style`, `skip_keep_types`, `mode`, and `parrot_typed`. The cache is a
+bounded LRU (`--result-cache-entries`, `--result-cache-bytes`) of output only;
+it stores no KV state. Hits report `usage.result_cache.status = "hit"` with
+`decodes = 0`; `usage.readout`/`usage.pcd` are absent on a hit.
+
 ## Temperature and confidence
 
 `--temperature` scales the restricted logits before softmax. It affects the
@@ -323,6 +333,8 @@ the target with `-DCMAKE_CUDA_ARCHITECTURES=89`.
 --readout-cache-bytes BYTES readout prefix checkpoint budget (default 256 MiB)
 --weak-pos LIST     append jieba POS tags to the weak boundary set
 --weak-pos-override LIST  replace the weak boundary set (use none to clear)
+--result-cache-entries N  cached identical responses (default 64)
+--result-cache-bytes BYTES  result cache budget (default 64 MiB)
 --api-key KEY       require Authorization: Bearer KEY
 --help              show this help
 ```
@@ -352,7 +364,7 @@ Response:
 | `redacted_text` | original text with redacted spans replaced |
 | `spans[]` | `{type, text, redacted, occurrences: [{start, end, score[, redact_score]}]}` |
 | `model`, `backend` | loaded model and compute backend |
-| `usage` | `{decodes, branches, generated_tokens, fallback[, readout][, pcd]}` |
+| `usage` | `{decodes, branches, generated_tokens, fallback[, readout][, pcd][, result_cache]}` |
 
 `score` is the readout/arbitration confidence (request-driven priors can
 contribute); it is not a calibrated probability. `redact_score` is only present
@@ -381,6 +393,7 @@ The test script starts and stops its own server on a random port. It covers:
 - NIST regex fast path (SSN, ITIN, EIN, payment card, IBAN, IPv6, date of birth) with zero decodes;
 - readout and PCD prefix-checkpoint cache hits;
 - parrot mode plumbing, typed parrot, and `mask_style: "type"`;
+- identical-request result cache;
 - `redact` flip;
 - equal-length and typed masking;
 - auto redaction;

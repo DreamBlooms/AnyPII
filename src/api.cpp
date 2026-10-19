@@ -3,9 +3,11 @@
 #include <algorithm>
 #include <chrono>
 #include <iostream>
+#include <list>
 #include <mutex>
 #include <sstream>
 #include <stdexcept>
+#include <unordered_map>
 
 #include <httplib.h>
 #include <nlohmann/json.hpp>
@@ -195,7 +197,116 @@ json to_json(const AnyPiiResult & result) {
             }},
         };
     }
+    if (!result.result_cache_status.empty()) {
+        out["usage"]["result_cache"] = {
+            {"status", result.result_cache_status},
+            {"entries", result.result_cache_entries},
+        };
+    }
     return out;
+}
+
+size_t result_bytes(const AnyPiiResult & result) {
+    size_t bytes = sizeof(AnyPiiResult) + result.redacted_text.size() +
+                   result.model.size() + result.backend.size();
+    for (const auto & span : result.spans) {
+        bytes += sizeof(EntitySpan) + span.type.size() + span.text.size();
+        bytes += span.occurrences.size() * sizeof(SpanOccurrence);
+    }
+    return bytes;
+}
+
+struct CachedResult {
+    std::string redacted_text;
+    std::vector<EntitySpan> spans;
+    std::string model;
+    std::string backend;
+    size_t bytes = 0;
+    std::list<std::string>::iterator recency;
+};
+
+class ResultCache {
+public:
+    ResultCache(int max_entries, size_t max_bytes)
+        : max_entries_(std::max(0, max_entries)), max_bytes_(max_bytes) {}
+
+    bool get(const std::string & key, AnyPiiResult & out) {
+        auto it = entries_.find(key);
+        if (it == entries_.end()) return false;
+        order_.splice(order_.begin(), order_, it->second.recency);
+        out = AnyPiiResult{};
+        out.redacted_text = it->second.redacted_text;
+        out.spans = it->second.spans;
+        out.model = it->second.model;
+        out.backend = it->second.backend;
+        out.result_cache_status = "hit";
+        out.result_cache_entries = entries_.size();
+        return true;
+    }
+
+    void put(const std::string & key, const AnyPiiResult & result) {
+        if (max_entries_ <= 0 || max_bytes_ == 0) return;
+        const size_t bytes = result_bytes(result);
+        if (bytes > max_bytes_) return;
+        if (auto old = entries_.find(key); old != entries_.end()) {
+            used_ -= old->second.bytes;
+            order_.erase(old->second.recency);
+            entries_.erase(old);
+        }
+        while (!order_.empty() &&
+               (entries_.size() + 1 > (size_t) max_entries_ ||
+                used_ + bytes > max_bytes_)) {
+            const std::string & oldest = order_.back();
+            auto it = entries_.find(oldest);
+            if (it != entries_.end()) {
+                used_ -= it->second.bytes;
+                entries_.erase(it);
+            }
+            order_.pop_back();
+        }
+        order_.push_front(key);
+        CachedResult entry;
+        entry.redacted_text = result.redacted_text;
+        entry.spans = result.spans;
+        entry.model = result.model;
+        entry.backend = result.backend;
+        entry.bytes = bytes;
+        entry.recency = order_.begin();
+        used_ += bytes;
+        entries_[key] = std::move(entry);
+    }
+
+    size_t entries() const { return entries_.size(); }
+
+private:
+    int max_entries_;
+    size_t max_bytes_;
+    size_t used_ = 0;
+    std::list<std::string> order_;
+    std::unordered_map<std::string, CachedResult> entries_;
+};
+
+std::string result_cache_key(const Engine & engine, const AnyPiiRequest & request) {
+    json key;
+    key["cache_version"] = "anypii-result-v1";
+    key["model"] = engine.model_name();
+    key["text"] = request.text;
+    key["policy"] = request.policy;
+    key["threshold"] = request.threshold;
+    key["mask_style"] = request.mask_style;
+    key["mode"] = request.mode;
+    key["skip_keep_types"] = request.skip_keep_types;
+    key["parrot_typed"] = request.parrot_typed;
+    key["fallback"] = request.fallback;
+    key["types"] = json::array();
+    for (const auto & type : request.types) {
+        key["types"].push_back({
+            {"id", type.id},
+            {"description", type.description},
+            {"redact", (int) type.redact},
+        });
+    }
+    return key.dump();
 }
 
 } // namespace
@@ -209,6 +320,7 @@ void run_server(Engine & engine, const ServerOptions & options) {
     pcd_options.cache_bytes = options.pcd_cache_bytes;
     pcd_options.temperature = options.temperature;
     PcdDecoder pcd(engine, pcd_options);
+    ResultCache result_cache(options.result_cache_entries, options.result_cache_bytes);
 
     server.Get("/health", [&](const httplib::Request &, httplib::Response & res) {
         json body;
@@ -251,7 +363,14 @@ void run_server(Engine & engine, const ServerOptions & options) {
             ropts.none_margin_max_len = options.none_margin_max_len;
             ropts.none_margin_redact = options.none_margin_redact;
             ropts.pcd = &pcd;
-            AnyPiiResult result = run_pipeline(engine, request, ropts);
+            const std::string cache_key = result_cache_key(engine, request);
+            AnyPiiResult result;
+            if (!result_cache.get(cache_key, result)) {
+                result = run_pipeline(engine, request, ropts);
+                result.result_cache_status = "miss";
+                result_cache.put(cache_key, result);
+                result.result_cache_entries = result_cache.entries();
+            }
             res.set_content(to_json(result).dump(), "application/json; charset=utf-8");
         } catch (const std::invalid_argument & e) {
             send_error(res, 400, e.what());

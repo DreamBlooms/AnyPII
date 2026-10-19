@@ -176,9 +176,26 @@ def test_readout_cache(c):
     }
     r1 = c.post(req)
     assert r1["usage"]["readout"]["cache_status"] in ("miss", "hit"), r1["usage"]
-    r2 = c.post(req)
+    req2 = dict(req)
+    req2["threshold"] = 0.56  # bypass the result cache, keep the same prefix
+    r2 = c.post(req2)
     assert r2["usage"]["readout"]["cache_status"] == "hit", r2["usage"]
     print("ok readout cache")
+
+
+def test_result_cache(c):
+    req = {
+        "state": {"text": "李雷来访。", "policy": "打码人名。"},
+        "types": {"person": {"description": "person name", "redact": True}},
+    }
+    r1 = c.post(req)
+    assert r1["usage"]["result_cache"]["status"] == "miss", r1["usage"]
+    r2 = c.post(req)
+    assert r2["usage"]["result_cache"]["status"] == "hit", r2["usage"]
+    assert r2["usage"]["decodes"] == 0, r2["usage"]
+    assert r2["redacted_text"] == r1["redacted_text"]
+    assert r2["spans"] == r1["spans"]
+    print("ok result cache")
 
 
 def test_pcd_mode(c):
@@ -190,7 +207,9 @@ def test_pcd_mode(c):
     r1 = c.post(req)
     assert "pcd" in r1["usage"], r1["usage"]
     assert r1["usage"]["pcd"]["forward_passes"] > 0, r1["usage"]
-    r2 = c.post(req)
+    req2 = dict(req)
+    req2["threshold"] = 0.56  # bypass the result cache, keep the same PCD prefix
+    r2 = c.post(req2)
     assert r2["usage"]["pcd"]["cache_status"] == "hit", r2["usage"]["pcd"]
     print("ok PCD mode")
 
@@ -206,6 +225,7 @@ def test_parrot_mode(c):
     assert r["usage"]["generated_tokens"] == 0
 
     req["mode"] = "复读机"
+    req["threshold"] = 0.56  # bypass the result cache
     r2 = c.post(req)
     assert "pcd" in r2["usage"], r2["usage"]
     print("ok parrot mode")
@@ -387,6 +407,7 @@ def main():
         test_contact(c)
         test_nist_fast_path(c)
         test_readout_cache(c)
+        test_result_cache(c)
         test_pcd_mode(c)
         test_parrot_mode(c)
         test_redact_flip(c)

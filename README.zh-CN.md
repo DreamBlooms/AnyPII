@@ -180,6 +180,15 @@ redacted)` 的多次出现会合并为一个 span。
 
 也可用环境变量 `ANYPPI_WEAK_POS` 和 `ANYPPI_WEAK_POS_OVERRIDE`。
 
+## 结果缓存
+
+相同请求会直接返回缓存结果，不再执行 decode。缓存 key 包含模型名、原文、策略、
+有序类型定义、threshold、`mask_style`、`skip_keep_types`、`mode` 和
+`parrot_typed`。缓存为有界 LRU（`--result-cache-entries`、
+`--result-cache-bytes`），只存输出，不存 KV。命中时
+`usage.result_cache.status = "hit"` 且 `decodes = 0`；命中响应中不会有
+`usage.readout`/`usage.pcd`。
+
 ## 温度与置信度
 
 `--temperature` 会在 softmax 前缩放受限 logits。它影响 readout 路径、PCD 的
@@ -284,6 +293,8 @@ CUDA 交叉编译时可用 `-DCMAKE_CUDA_ARCHITECTURES=89` 指定目标架构。
 --readout-cache-bytes BYTES readout 前缀 checkpoint 预算（默认 256 MiB）
 --weak-pos LIST     追加 jieba 降权词性标签
 --weak-pos-override LIST  覆盖降权词性集合（none 表示清空）
+--result-cache-entries N  缓存相同请求的结果数（默认 64）
+--result-cache-bytes BYTES  结果缓存预算（默认 64 MiB）
 --api-key KEY       要求 Authorization: Bearer KEY
 --help              显示帮助
 ```
@@ -313,7 +324,7 @@ CUDA 交叉编译时可用 `-DCMAKE_CUDA_ARCHITECTURES=89` 指定目标架构。
 | `redacted_text` | 打码后的文本 |
 | `spans[]` | `{type, text, redacted, occurrences: [{start, end, score[, redact_score]}]}` |
 | `model`, `backend` | 模型与计算后端 |
-| `usage` | `{decodes, branches, generated_tokens, fallback[, readout][, pcd]}` |
+| `usage` | `{decodes, branches, generated_tokens, fallback[, readout][, pcd][, result_cache]}` |
 
 `score` 是由 readout 与裁决得到的置信度，包含请求驱动先验的影响，并非校准概率。
 `redact_score` 仅在 `"auto"` 类型时返回。同一 `(type, text, redacted)` 的多次出现
@@ -341,6 +352,7 @@ python3 tests/test_anypii.py
 - NIST 正则快速路径（SSN、ITIN、EIN、支付卡、IBAN、IPv6、出生日期），零 decode；
 - readout 与 PCD 的 prefix-checkpoint 缓存命中；
 - parrot/复读机 模式管线、typed parrot 与 `mask_style: "type"`；
+- 相同请求结果缓存；
 - `redact` 翻转；
 - 等长遮罩与 typed 遮罩；
 - auto redact；

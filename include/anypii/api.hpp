@@ -20,6 +20,8 @@ struct ServerOptions {
     double none_margin_redact = 0.20;
     int pcd_cache_entries = 4;
     size_t pcd_cache_bytes = 256ull * 1024 * 1024;
+    int result_cache_entries = 64;
+    size_t result_cache_bytes = 64ull * 1024 * 1024;
 };
 
 void run_server(Engine & engine, const ServerOptions & options);

@@ -92,6 +92,8 @@ struct AnyPiiResult {
     std::string readout_cache_status;
     std::size_t readout_cache_entries = 0;
     std::size_t readout_checkpoint_bytes = 0;
+    std::string result_cache_status;
+    std::size_t result_cache_entries = 0;
 };
 
 } // namespace anypii

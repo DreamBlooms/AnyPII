@@ -34,6 +34,8 @@ struct Args {
     size_t readout_cache_bytes = 256ull * 1024 * 1024;
     std::string weak_pos;
     std::string weak_pos_override;
+    int result_cache_entries = 64;
+    size_t result_cache_bytes = 64ull * 1024 * 1024;
 };
 
 std::vector<std::string> split_tags(const std::string & text) {
@@ -82,6 +84,8 @@ void usage(const char * argv0) {
         << "  --readout-cache-bytes BYTES readout prefix checkpoint budget (default 256 MiB)\n"
         << "  --weak-pos LIST     append jieba POS tags to the weak boundary set\n"
         << "  --weak-pos-override LIST  replace the weak boundary set (use none to clear)\n"
+        << "  --result-cache-entries N  cached identical responses (default 64)\n"
+        << "  --result-cache-bytes BYTES  result cache budget (default 64 MiB)\n"
         << "  --api-key KEY       require Authorization: Bearer KEY\n"
         << "  --help              show this help\n";
 }
@@ -152,6 +156,10 @@ Args parse_args(int argc, char ** argv) {
             a.weak_pos = need("--weak-pos");
         } else if (arg == "--weak-pos-override") {
             a.weak_pos_override = need("--weak-pos-override");
+        } else if (arg == "--result-cache-entries") {
+            a.result_cache_entries = std::stoi(need("--result-cache-entries"));
+        } else if (arg == "--result-cache-bytes") {
+            a.result_cache_bytes = (size_t) std::stoull(need("--result-cache-bytes"));
         } else if (arg == "--api-key") {
             a.api_key = need("--api-key");
         } else {
@@ -207,6 +215,8 @@ int main(int argc, char ** argv) {
         sopts.none_margin_redact = args.none_margin_redact;
         sopts.pcd_cache_entries = args.pcd_cache_entries;
         sopts.pcd_cache_bytes = args.pcd_cache_bytes;
+        sopts.result_cache_entries = args.result_cache_entries;
+        sopts.result_cache_bytes = args.result_cache_bytes;
         anypii::run_server(engine, sopts);
     } catch (const std::exception & e) {
         std::cerr << "error: " << e.what() << "\n";
