@@ -33,6 +33,21 @@ struct PromptTokens {
     std::vector<int> slot_indices;
 };
 
+// One token for the low-level batched decode used by the PCD path.
+struct EngineBatchToken {
+    llama_token token = 0;
+    llama_pos position = 0;
+    std::vector<llama_seq_id> sequences;
+    bool logits = false;
+};
+
+// Complete host-side copy of one sequence state (attention KV plus any
+// recurrent state for hybrid models).
+struct SequenceCheckpoint {
+    std::vector<uint8_t> bytes;
+    int max_position = -1;
+};
+
 // One independent decision branch: a question appended to the shared prefix,
 // ending at the assistant decision position. label_groups[i] are the vocabulary
 // tokens that may express option i.
@@ -70,6 +85,23 @@ public:
         const std::vector<BranchPrompt> & branches,
         int max_branches_per_decode,
         double temperature = 1.0);
+
+    // Low-level primitives used by the parallel constrained decoding path.
+    void synchronize();
+    void clear_memory();
+    // Drop the readout prefix-cache bookkeeping after another path overwrites
+    // sequence 0 (the PCD decoder does this).
+    void invalidate_prefix_cache();
+    void decode_single(const std::vector<llama_token> & tokens, int seq, int start,
+                       bool logits_on_last);
+    void decode_batch(const std::vector<EngineBatchToken> & tokens);
+    const float * logits_ith(int index) const;
+    void copy_sequence(int src, int dst, int p0, int p1);
+    bool remove_sequence(int seq, int p0, int p1);
+    int sequence_max_position(int seq) const;
+    SequenceCheckpoint save_sequence(int seq) const;
+    bool restore_sequence(int seq, const SequenceCheckpoint & checkpoint);
+    int n_seq_max() const;
 
     std::string token_to_piece(llama_token token) const;
     std::string model_name() const;

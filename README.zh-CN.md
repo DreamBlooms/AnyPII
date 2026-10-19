@@ -129,6 +129,18 @@ redacted)` 的多次出现会合并为一个 span。
 并省略其输出，同时直接跳过格式匹配的保留类型候选（例如工单号），不产生 span。
 若所有类型均为保留类型，则直接返回原文，不执行 decode。
 
+## 实验性 PCD 路径
+
+设置 `"mode": "pcd"` 可启用从 [pcdServer](https://github.com/stephanj/pcdServer)
+适配的并行约束解码后端。它把决策渲染为有界字段，每个字段一条 sequence，
+只对允许的 choice token 打分，用 collision tree 消歧共享 token 前缀，并缓存
+prefix checkpoint（`--pcd-cache-entries`、`--pcd-cache-bytes`）。
+
+默认仍为 `"readout"`。当前离线测试中，PCD 在缓存命中时更快，但对动态 span
+的准确率较低（可能把患者/药品提及扩展过长），因此主要用于重复 schema 和
+基准测试。该模式的响应包含 `usage.pcd`（forward passes、缓存状态、
+checkpoint 字节数与阶段耗时）。
+
 ## 构建
 
 需要 CMake 3.20+、Git 和 C++20 编译器。官方 llama.cpp **v0.6.0** 与 cppjieba
@@ -185,6 +197,8 @@ CUDA 交叉编译时可用 `-DCMAKE_CUDA_ARCHITECTURES=89` 指定目标架构。
 --none-margin M     最小 P(type)-P(none) 置信差（默认 0.65）
 --none-margin-max-len N  仅对不超过 N 个 code point 的片段应用置信差（默认 4）
 --none-margin-redact M   redact:true 类型的最小置信差（默认 0.20）
+--pcd-cache-entries N    PCD 前缀 checkpoint 条目数（默认 4）
+--pcd-cache-bytes BYTES  PCD 前缀 checkpoint 预算（默认 256 MiB）
 --api-key KEY       要求 Authorization: Bearer KEY
 --help              显示帮助
 ```
@@ -203,7 +217,7 @@ CUDA 交叉编译时可用 `-DCMAKE_CUDA_ARCHITECTURES=89` 指定目标架构。
 | `threshold` | 可选，默认 `0.55` |
 | `mask_style` | `"token"`（`[REDACTED]`）、`"length"`（每个 code point 一个 `█`）或 `"typed"`（`[type:index]`）；`"mask"` 是 length 的别名 |
 | `skip_keep_types` | 可选；跳过仅含保留类型的探测、精修与输出 |
-| `mode` | 可选；当前仅实现 readout |
+| `mode` | `"readout"`（默认）或 `"pcd"`（实验性并行约束解码） |
 | `fallback` | 可选；为后续约束解码路径保留 |
 
 响应：
@@ -213,7 +227,7 @@ CUDA 交叉编译时可用 `-DCMAKE_CUDA_ARCHITECTURES=89` 指定目标架构。
 | `redacted_text` | 打码后的文本 |
 | `spans[]` | `{type, text, redacted, occurrences: [{start, end, score[, redact_score]}]}` |
 | `model`, `backend` | 模型与计算后端 |
-| `usage` | `{decodes, branches, generated_tokens, fallback}` |
+| `usage` | `{decodes, branches, generated_tokens, fallback[, pcd]}` |
 
 `score` 是由 readout 与裁决得到的置信度，包含请求驱动先验的影响，并非校准概率。
 `redact_score` 仅在 `"auto"` 类型时返回。同一 `(type, text, redacted)` 的多次出现

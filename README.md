@@ -152,6 +152,20 @@ boundary/type refinement and output for keep-only components, and consumes
 format-matched keep candidates (e.g. a ticket number) without emitting spans.
 If every type is keep, the request returns the original text with zero decodes.
 
+## Experimental PCD path
+
+Set `"mode": "pcd"` to use the Parallel Constrained Decoding backend adapted
+from [pcdServer](https://github.com/stephanj/pcdServer). It renders bounded
+fields, broadcasts one sequence per field, scores only the allowed choice
+tokens, resolves shared token prefixes with a collision tree, and caches prefix
+checkpoints (`--pcd-cache-entries`, `--pcd-cache-bytes`).
+
+The default remains `"readout"`. In current tests PCD is faster on cache hits
+but less accurate on dynamic spans (it can over-extend a patient/drug mention),
+so it is intended for repeated identical schemas and benchmarking. Responses in
+this mode include `usage.pcd` with forward passes, cache status, checkpoint
+bytes, and phase timings.
+
 ## Build
 
 Requires CMake 3.20+, Git, and a C++20 compiler. The official llama.cpp
@@ -211,6 +225,8 @@ the target with `-DCMAKE_CUDA_ARCHITECTURES=89`.
 --none-margin M     minimum P(type)-P(none) margin (default 0.65)
 --none-margin-max-len N  apply the margin to spans up to N code points (default 4)
 --none-margin-redact M   margin for redact:true types (default 0.20)
+--pcd-cache-entries N    PCD prefix checkpoint entries (default 4)
+--pcd-cache-bytes BYTES  PCD prefix checkpoint budget (default 256 MiB)
 --api-key KEY       require Authorization: Bearer KEY
 --help              show this help
 ```
@@ -229,7 +245,7 @@ Request:
 | `threshold` | optional, default `0.55` |
 | `mask_style` | `"token"` (`[REDACTED]`), `"length"` (`█` per code point), or `"typed"` (`[type:index]`); `"mask"` is an alias for length |
 | `skip_keep_types` | optional; skip keep-only detection/refinement/output |
-| `mode` | optional; readout is the only implemented mode |
+| `mode` | `"readout"` (default) or `"pcd"` (experimental Parallel Constrained Decoding) |
 | `fallback` | optional; reserved for a future constrained-decoding path |
 
 Response:
@@ -239,7 +255,7 @@ Response:
 | `redacted_text` | original text with redacted spans replaced |
 | `spans[]` | `{type, text, redacted, occurrences: [{start, end, score[, redact_score]}]}` |
 | `model`, `backend` | loaded model and compute backend |
-| `usage` | `{decodes, branches, generated_tokens, fallback}` |
+| `usage` | `{decodes, branches, generated_tokens, fallback[, pcd]}` |
 
 `score` is the readout/arbitration confidence (request-driven priors can
 contribute); it is not a calibrated probability. `redact_score` is only present

@@ -5,6 +5,8 @@
 
 namespace anypii {
 
+class PcdDecoder;
+
 struct ResolveOptions {
     int max_branches_per_decode = 32;
     int max_text_cp = 16000;
@@ -19,6 +21,7 @@ struct ResolveOptions {
     double none_margin = 0.65;
     int none_margin_max_len = 4;
     double none_margin_redact = 0.20;
+    PcdDecoder * pcd = nullptr;
 };
 
 AnyPiiResult run_pipeline(Engine & engine, const AnyPiiRequest & request,

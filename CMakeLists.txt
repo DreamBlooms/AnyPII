@@ -53,6 +53,7 @@ add_executable(anypii
     src/main.cpp
     src/engine.cpp
     src/nist.cpp
+    src/pcd.cpp
     src/segment.cpp
     src/sys.cpp
     src/unicode.cpp

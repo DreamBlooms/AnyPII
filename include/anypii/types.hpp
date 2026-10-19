@@ -59,6 +59,22 @@ struct AnyPiiRequest {
     bool skip_keep_types = false;
 };
 
+struct PcdPhaseTimings {
+    double tokenize_ms = 0.0;
+    double restore_or_prefill_ms = 0.0;
+    double broadcast_ms = 0.0;
+    double suffix_ms = 0.0;
+    double tree_ms = 0.0;
+};
+
+struct PcdMetrics {
+    double elapsed_ms = 0.0;
+    int forward_passes = 0;
+    std::string cache_status;
+    std::size_t checkpoint_bytes = 0;
+    PcdPhaseTimings phases;
+};
+
 struct AnyPiiResult {
     std::string redacted_text;
     std::vector<EntitySpan> spans;
@@ -69,6 +85,8 @@ struct AnyPiiResult {
     long long prefill_tokens = 0;
     int generated_tokens = 0;
     bool fallback = false;
+    bool pcd = false;
+    PcdMetrics pcd_metrics;
 };
 
 } // namespace anypii

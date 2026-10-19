@@ -10,6 +10,7 @@
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 
+#include "anypii/pcd.hpp"
 #include "anypii/resolve.hpp"
 #include "anypii/types.hpp"
 
@@ -66,8 +67,8 @@ AnyPiiRequest parse_request(const std::string & body) {
     if (j.contains("mode")) {
         if (!j["mode"].is_string()) throw std::invalid_argument("mode must be a string");
         req.mode = j["mode"].get<std::string>();
-        if (req.mode != "readout") {
-            throw std::invalid_argument("mode must be \"readout\"");
+        if (req.mode != "readout" && req.mode != "pcd") {
+            throw std::invalid_argument("mode must be \"readout\" or \"pcd\"");
         }
     }
     if (!j.contains("types") || !j["types"].is_object()) {
@@ -155,6 +156,21 @@ json to_json(const AnyPiiResult & result) {
         {"generated_tokens", result.generated_tokens},
         {"fallback", result.fallback},
     };
+    if (result.pcd) {
+        out["usage"]["pcd"] = {
+            {"forward_passes", result.pcd_metrics.forward_passes},
+            {"elapsed_ms", result.pcd_metrics.elapsed_ms},
+            {"cache_status", result.pcd_metrics.cache_status},
+            {"checkpoint_bytes", result.pcd_metrics.checkpoint_bytes},
+            {"phases", {
+                {"tokenize_ms", result.pcd_metrics.phases.tokenize_ms},
+                {"restore_or_prefill_ms", result.pcd_metrics.phases.restore_or_prefill_ms},
+                {"broadcast_ms", result.pcd_metrics.phases.broadcast_ms},
+                {"suffix_ms", result.pcd_metrics.phases.suffix_ms},
+                {"tree_ms", result.pcd_metrics.phases.tree_ms},
+            }},
+        };
+    }
     return out;
 }
 
@@ -164,6 +180,10 @@ void run_server(Engine & engine, const ServerOptions & options) {
     httplib::Server server;
     server.set_payload_max_length(2 * 1024 * 1024);
     std::mutex engine_mutex;
+    PcdOptions pcd_options;
+    pcd_options.cache_entries = (size_t) std::max(0, options.pcd_cache_entries);
+    pcd_options.cache_bytes = options.pcd_cache_bytes;
+    PcdDecoder pcd(engine, pcd_options);
 
     server.Get("/health", [&](const httplib::Request &, httplib::Response & res) {
         json body;
@@ -205,6 +225,7 @@ void run_server(Engine & engine, const ServerOptions & options) {
             ropts.none_margin = options.none_margin;
             ropts.none_margin_max_len = options.none_margin_max_len;
             ropts.none_margin_redact = options.none_margin_redact;
+            ropts.pcd = &pcd;
             AnyPiiResult result = run_pipeline(engine, request, ropts);
             res.set_content(to_json(result).dump(), "application/json; charset=utf-8");
         } catch (const std::invalid_argument & e) {

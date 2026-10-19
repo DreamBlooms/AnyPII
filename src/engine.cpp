@@ -470,6 +470,107 @@ std::vector<std::vector<double>> Engine::decode_branches(
     return out;
 }
 
+void Engine::synchronize() { llama_synchronize(p->ctx); }
+
+void Engine::clear_memory() { llama_memory_clear(llama_get_memory(p->ctx), true); }
+
+void Engine::invalidate_prefix_cache() {
+    p->prefix_cache_tokens.clear();
+    p->prefix_cache_text.clear();
+}
+
+void Engine::decode_single(const std::vector<llama_token> & tokens, int seq, int start,
+                           bool logits_on_last) {
+    const int chunk_max = p->n_batch > 0 ? p->n_batch : std::max(1, (int) tokens.size());
+    for (int offset = 0; offset < (int) tokens.size(); offset += chunk_max) {
+        const int count = std::min(chunk_max, (int) tokens.size() - offset);
+        llama_batch batch = llama_batch_init(count, 0, 1);
+        batch.n_tokens = count;
+        for (int i = 0; i < count; ++i) {
+            batch.token[i] = tokens[(size_t) (offset + i)];
+            batch.pos[i] = (llama_pos) (start + offset + i);
+            batch.n_seq_id[i] = 1;
+            batch.seq_id[i][0] = (llama_seq_id) seq;
+            batch.logits[i] = 0;
+        }
+        if (logits_on_last && offset + count == (int) tokens.size()) {
+            batch.logits[count - 1] = 1;
+        }
+        const int rc = llama_decode(p->ctx, batch);
+        llama_batch_free(batch);
+        if (rc != 0) {
+            throw std::runtime_error(rc == 1 ? "context is too small"
+                                             : "llama_decode failed");
+        }
+    }
+}
+
+void Engine::decode_batch(const std::vector<EngineBatchToken> & tokens) {
+    if (tokens.empty()) return;
+    llama_batch batch = llama_batch_init((int) tokens.size(), 0, 1);
+    batch.n_tokens = (int) tokens.size();
+    for (size_t i = 0; i < tokens.size(); ++i) {
+        const auto & t = tokens[i];
+        batch.token[i] = t.token;
+        batch.pos[i] = t.position;
+        batch.n_seq_id[i] = (int) t.sequences.size();
+        for (size_t k = 0; k < t.sequences.size(); ++k) {
+            batch.seq_id[i][k] = t.sequences[k];
+        }
+        batch.logits[i] = t.logits ? 1 : 0;
+    }
+    const int rc = llama_decode(p->ctx, batch);
+    llama_batch_free(batch);
+    if (rc != 0) {
+        throw std::runtime_error(rc == 1 ? "context is too small"
+                                         : "llama_decode failed");
+    }
+}
+
+const float * Engine::logits_ith(int index) const {
+    const float * out = llama_get_logits_ith(p->ctx, index);
+    if (!out) throw std::runtime_error("logits unavailable");
+    return out;
+}
+
+void Engine::copy_sequence(int src, int dst, int p0, int p1) {
+    llama_memory_seq_cp(llama_get_memory(p->ctx), (llama_seq_id) src,
+                        (llama_seq_id) dst, (llama_pos) p0, (llama_pos) p1);
+}
+
+bool Engine::remove_sequence(int seq, int p0, int p1) {
+    return llama_memory_seq_rm(llama_get_memory(p->ctx), (llama_seq_id) seq,
+                               (llama_pos) p0, (llama_pos) p1);
+}
+
+int Engine::sequence_max_position(int seq) const {
+    return llama_memory_seq_pos_max(llama_get_memory(p->ctx), (llama_seq_id) seq);
+}
+
+SequenceCheckpoint Engine::save_sequence(int seq) const {
+    const size_t size = llama_state_seq_get_size_ext(
+        p->ctx, (llama_seq_id) seq, LLAMA_STATE_SEQ_FLAGS_NONE);
+    if (size == 0) throw std::runtime_error("empty sequence checkpoint");
+    SequenceCheckpoint out;
+    out.bytes.resize(size);
+    out.max_position = sequence_max_position(seq);
+    const size_t written = llama_state_seq_get_data_ext(
+        p->ctx, out.bytes.data(), size, (llama_seq_id) seq,
+        LLAMA_STATE_SEQ_FLAGS_NONE);
+    if (written != size) throw std::runtime_error("sequence checkpoint size mismatch");
+    return out;
+}
+
+bool Engine::restore_sequence(int seq, const SequenceCheckpoint & checkpoint) {
+    if (checkpoint.bytes.empty()) return false;
+    const size_t consumed = llama_state_seq_set_data_ext(
+        p->ctx, checkpoint.bytes.data(), checkpoint.bytes.size(),
+        (llama_seq_id) seq, LLAMA_STATE_SEQ_FLAGS_NONE);
+    return consumed == checkpoint.bytes.size();
+}
+
+int Engine::n_seq_max() const { return llama_n_seq_max(p->ctx); }
+
 std::string Engine::token_to_piece(llama_token token) const { return p->token_to_piece(token); }
 std::string Engine::model_name() const { return p->model_desc; }
 std::string Engine::backend_name() const {

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <string>
 
 #include "anypii/engine.hpp"
@@ -17,6 +18,8 @@ struct ServerOptions {
     double none_margin = 0.65;
     int none_margin_max_len = 4;
     double none_margin_redact = 0.20;
+    int pcd_cache_entries = 4;
+    size_t pcd_cache_bytes = 256ull * 1024 * 1024;
 };
 
 void run_server(Engine & engine, const ServerOptions & options);

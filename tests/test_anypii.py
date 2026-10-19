@@ -169,6 +169,20 @@ def test_nist_fast_path(c):
     print("ok NIST fast path")
 
 
+def test_pcd_mode(c):
+    req = {
+        "state": {"text": "张三来访。", "policy": "打码人名。"},
+        "types": {"person": {"description": "person name", "redact": True}},
+        "mode": "pcd",
+    }
+    r1 = c.post(req)
+    assert "pcd" in r1["usage"], r1["usage"]
+    assert r1["usage"]["pcd"]["forward_passes"] > 0, r1["usage"]
+    r2 = c.post(req)
+    assert r2["usage"]["pcd"]["cache_status"] == "hit", r2["usage"]["pcd"]
+    print("ok PCD mode")
+
+
 def test_redact_flip(c):
     req = load("medical.json")
     req["types"]["patient_name"]["redact"] = False
@@ -319,6 +333,7 @@ def main():
         test_medical(c)
         test_contact(c)
         test_nist_fast_path(c)
+        test_pcd_mode(c)
         test_redact_flip(c)
         test_length_mask(c)
         test_auto_redact(c)

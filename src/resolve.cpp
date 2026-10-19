@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <functional>
 #include <iostream>
 #include <map>
 #include <set>
@@ -14,6 +15,7 @@
 #include "anypii/candidates.hpp"
 #include "anypii/mask.hpp"
 #include "anypii/nist.hpp"
+#include "anypii/pcd.hpp"
 #include "anypii/prompt.hpp"
 #include "anypii/unicode.hpp"
 
@@ -241,8 +243,455 @@ double boundary_factor(const std::string & span) {
 
 } // namespace
 
+
+namespace {
+
+std::string sanitize_pcd_text(const std::string & s) {
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size();) {
+        if (i + 1 < s.size() && s[i] == '<' && s[i + 1] == '|') {
+            out += "< |";
+            i += 2;
+        } else if (i + 1 < s.size() && s[i] == '|' && s[i + 1] == '>') {
+            out += "| >";
+            i += 2;
+        } else {
+            out.push_back(s[i++]);
+        }
+    }
+    return out;
+}
+
+std::string pcd_chat_prefix(const std::string & system, const std::string & evidence) {
+    return "<|im_start|>system\n" + sanitize_pcd_text(system) +
+           "<|im_end|>\n<|im_start|>user\n" + sanitize_pcd_text(evidence) +
+           "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n{\n";
+}
+
+std::string pcd_field_name(const std::string & hint, int index) {
+    const Utf8Text t = decode_utf8(hint);
+    std::string name = clean_line(t.substr(0, std::min(12, t.size())));
+    for (char & c : name) {
+        if (c == '"' || c == '\\') c = '_';
+    }
+    if (name.empty()) name = "field";
+    return name + "#" + std::to_string(index);
+}
+
+std::string pcd_type_legend(const TypeTable & table) {
+    std::string out = "Entity types:\n";
+    for (const auto & t : table.types) {
+        out += "- " + t.id + ": " + t.description + "\n";
+    }
+    return out;
+}
+
+void emit_grouped(AnyPiiResult & out, const Utf8Text & text,
+                  const std::vector<PhraseHit> & final_hits,
+                  const AnyPiiRequest & request);
+
+void add_pcd_metrics(AnyPiiResult & out, const PcdMetrics & m, int fields) {
+    out.pcd = true;
+    out.decodes += m.forward_passes;
+    out.slots += fields;
+    out.pcd_metrics.forward_passes += m.forward_passes;
+    out.pcd_metrics.elapsed_ms += m.elapsed_ms;
+    out.pcd_metrics.checkpoint_bytes =
+        std::max(out.pcd_metrics.checkpoint_bytes, m.checkpoint_bytes);
+    out.pcd_metrics.cache_status = m.cache_status;
+    out.pcd_metrics.phases.tokenize_ms += m.phases.tokenize_ms;
+    out.pcd_metrics.phases.restore_or_prefill_ms += m.phases.restore_or_prefill_ms;
+    out.pcd_metrics.phases.broadcast_ms += m.phases.broadcast_ms;
+    out.pcd_metrics.phases.suffix_ms += m.phases.suffix_ms;
+    out.pcd_metrics.phases.tree_ms += m.phases.tree_ms;
+}
+
+void emit_grouped(AnyPiiResult & out, const Utf8Text & text,
+                  const std::vector<PhraseHit> & final_hits,
+                  const AnyPiiRequest & request) {
+    std::vector<EntitySpan> grouped;
+    std::vector<int> hit_group(final_hits.size());
+    std::map<std::tuple<std::string, std::string, bool>, int> group_lookup;
+    for (size_t i = 0; i < final_hits.size(); ++i) {
+        const auto & h = final_hits[i];
+        const auto key = std::make_tuple(h.type, h.text, h.redacted);
+        auto it = group_lookup.find(key);
+        int gi = -1;
+        if (it == group_lookup.end()) {
+            gi = (int) grouped.size();
+            EntitySpan s;
+            s.type = h.type;
+            s.text = h.text;
+            s.redacted = h.redacted;
+            grouped.push_back(std::move(s));
+            group_lookup.emplace(key, gi);
+        } else {
+            gi = it->second;
+        }
+        SpanOccurrence occ;
+        occ.start = h.start;
+        occ.end = h.end;
+        occ.score = h.score;
+        occ.redact_score = h.redact_score;
+        grouped[(size_t) gi].occurrences.push_back(occ);
+        hit_group[i] = gi;
+    }
+    out.spans = std::move(grouped);
+    out.redacted_text = apply_mask(text, final_hits, request.mask_style, &hit_group);
+    out.generated_tokens = 0;
+}
+
+} // namespace
+
+AnyPiiResult run_pcd_pipeline(Engine & engine, const AnyPiiRequest & request,
+                              const ResolveOptions & options) {
+    AnyPiiResult out;
+    out.model = engine.model_name();
+    out.backend = engine.backend_name();
+
+    const Utf8Text text = decode_utf8(request.text);
+    if (text.size() > options.max_text_cp) {
+        throw std::invalid_argument("state.text is too long (max " +
+                                    std::to_string(options.max_text_cp) + " code points)");
+    }
+    if (text.size() == 0) {
+        out.redacted_text = request.text;
+        return out;
+    }
+
+    const TypeTable table = build_type_table(request.types);
+    const int type_count = (int) table.types.size();
+    if (type_count == 0) {
+        out.redacted_text = request.text;
+        return out;
+    }
+    if (request.skip_keep_types) {
+        bool any_active = false;
+        for (const auto & t : request.types) {
+            if (t.redact != RedactMode::Keep) { any_active = true; break; }
+        }
+        if (!any_active) {
+            out.redacted_text = request.text;
+            return out;
+        }
+    }
+
+    const auto proposed = propose_candidates(text, engine, CandidateOptions{});
+    if ((int) proposed.size() > options.max_candidates) {
+        throw std::invalid_argument("too many candidate spans (max " +
+                                    std::to_string(options.max_candidates) +
+                                    "); shorten the text");
+    }
+    const auto type_label_ngrams = build_type_label_ngrams(request.types);
+    std::vector<std::pair<int, int>> regex_spans;
+    for (const auto & c : proposed) {
+        if (c.regex_hit) regex_spans.push_back({c.start, c.end});
+    }
+
+    std::vector<PhraseHit> hits;
+    std::vector<std::pair<int, int>> consumed;
+    std::vector<Candidate> candidates;
+    candidates.reserve(proposed.size());
+    for (const auto & c : proposed) {
+        bool already_consumed = false;
+        for (const auto & r : consumed) {
+            if (c.start < r.second && r.first < c.end) { already_consumed = true; break; }
+        }
+        if (already_consumed) continue;
+
+        if (c.regex_hit) {
+            const PiiFormat fmt = detect_format(c.text);
+            std::vector<int> ftypes;
+            for (int t = 0; t < type_count; ++t) {
+                if (type_matches_format(fmt, table.types[(size_t) t])) ftypes.push_back(t);
+            }
+            std::vector<int> len_types;
+            if (is_ascii_digits(c.text)) {
+                for (int t = 0; t < type_count; ++t) {
+                    if (length_type_bonus(c.end - c.start, table.types[(size_t) t]) > 1.0) {
+                        len_types.push_back(t);
+                    }
+                }
+            }
+            int forced = -1;
+            if (ftypes.size() == 1) forced = ftypes[0];
+            else if (ftypes.empty() && len_types.size() == 1) forced = len_types[0];
+            if (forced >= 0) {
+                consumed.push_back({c.start, c.end});
+                if (!(request.skip_keep_types &&
+                      table.types[(size_t) forced].redact == RedactMode::Keep)) {
+                    PhraseHit h;
+                    h.start = c.start;
+                    h.end = c.end;
+                    h.text = c.text;
+                    h.type = table.types[(size_t) forced].id;
+                    h.score = 1.0;
+                    hits.push_back(std::move(h));
+                }
+                continue;
+            }
+        }
+        if (!c.regex_hit) {
+            if (c.end - c.start <= 1) continue;
+            if (!c.pos_ok) continue;
+            if (is_type_label(decode_utf8(c.text), request.types, type_label_ngrams)) continue;
+            bool adjacent_regex = false;
+            if (c.end - c.start <= 6) {
+                for (const auto & [rs, re] : regex_spans) {
+                    const int gap_before = rs - c.end;
+                    const int gap_after = c.start - re;
+                    if ((gap_before >= 0 && gap_before <= 2) ||
+                        (gap_after >= 0 && gap_after <= 2)) {
+                        adjacent_regex = true;
+                        break;
+                    }
+                }
+            }
+            if (adjacent_regex) continue;
+            if (boundary_factor(c.text) < 0.75) continue;
+        }
+        candidates.push_back(c);
+    }
+    if (candidates.empty()) {
+        out.redacted_text = request.text;
+        return out;
+    }
+
+    PcdDecoder local_decoder(engine);
+    PcdDecoder & decoder = options.pcd ? *options.pcd : local_decoder;
+
+    auto decode_fields = [&](const std::string & system_prefix,
+                             const std::vector<PcdField> & fields,
+                             const std::function<void(const PcdFieldResult &, size_t)> & handle) {
+        const size_t chunk = 31;
+        for (size_t base = 0; base < fields.size(); base += chunk) {
+            std::vector<PcdField> cf;
+            for (size_t i = base; i < fields.size() && i < base + chunk; ++i) {
+                cf.push_back(fields[i]);
+            }
+            const std::string system = system_prefix + "\n\n" + pcd_system_prompt(cf);
+            PcdResult decoded = decoder.decode(pcd_chat_prefix(system, request.text), cf);
+            add_pcd_metrics(out, decoded.metrics, (int) cf.size());
+            for (size_t i = 0; i < cf.size(); ++i) {
+                handle(decoded.fields[i], base + i);
+            }
+        }
+    };
+
+    if (!candidates.empty()) {
+
+    // ---------- Boundary stage: one PCD field per overlapping component ----------
+    std::vector<int> all(candidates.size());
+    for (size_t i = 0; i < candidates.size(); ++i) all[i] = (int) i;
+    const auto comps = make_components(all, candidates);
+
+    std::vector<int> selected_cands;
+    struct BoundarySpec {
+        std::vector<int> cands;
+        std::vector<std::string> choices;
+    };
+    std::vector<BoundarySpec> bspecs;
+    std::vector<PcdField> bfields;
+    for (const auto & comp : comps) {
+        std::map<std::pair<int, int>, int> by_span;
+        for (int m : comp.members) {
+            const auto key = std::make_pair(candidates[(size_t) m].start,
+                                            candidates[(size_t) m].end);
+            auto it = by_span.find(key);
+            if (it == by_span.end() ||
+                candidates[(size_t) it->second].prior < candidates[(size_t) m].prior) {
+                by_span[key] = m;
+            }
+        }
+        std::vector<int> cands;
+        for (const auto & [key, m] : by_span) cands.push_back(m);
+        if (cands.empty()) continue;
+        if (cands.size() == 1) {
+            selected_cands.push_back(cands[0]);
+            continue;
+        }
+        BoundarySpec spec;
+        spec.cands = cands;
+        PcdField field;
+        field.name = "b" + std::to_string(bspecs.size());
+        field.description =
+            "Choose the complete entity mention from the overlapping candidates. "
+            "A disease, symptom, action, or role label is not an entity. Context: \"" +
+            clean_line(context_of(text, comp.start, comp.end)) + "\"";
+        for (int m : cands) spec.choices.push_back(candidates[(size_t) m].text);
+        spec.choices.push_back("none");
+        field.choices = spec.choices;
+        bspecs.push_back(spec);
+        bfields.push_back(std::move(field));
+    }
+    if (!bfields.empty()) {
+        const std::string policy = request.policy.empty() ? "none" : request.policy;
+        const std::string sys = "You are a PII entity-boundary arbiter. Policy:\n" + policy;
+        decode_fields(sys, bfields, [&](const PcdFieldResult & r, size_t idx) {
+            if (std::getenv("ANYPPI_DEBUG")) {
+                std::cerr << "[pcd-boundary] idx=" << idx << " value=[" << r.value
+                          << "] p=" << r.probability << "\n";
+            }
+            if (idx >= bspecs.size() || r.value == "none") return;
+            const auto & spec = bspecs[idx];
+            for (size_t i = 0; i < spec.cands.size(); ++i) {
+                if (spec.choices[i] == r.value) {
+                    selected_cands.push_back(spec.cands[i]);
+                    return;
+                }
+            }
+        });
+    }
+    if (selected_cands.empty()) {
+        out.redacted_text = request.text;
+        return out;
+    }
+
+    // ---------- Type stage: one PCD field per selected span ----------
+    std::vector<int> t_cands;
+    std::vector<PcdField> tfields;
+    for (int c : selected_cands) {
+        if (std::find(t_cands.begin(), t_cands.end(), c) != t_cands.end()) continue;
+        t_cands.push_back(c);
+        PcdField f;
+        f.name = pcd_field_name(candidates[(size_t) c].text, (int) tfields.size());
+        f.description = "Policy: " +
+                        (request.policy.empty() ? std::string("none") : request.policy) +
+                        ". Mention: \"" + clean_line(candidates[(size_t) c].text) +
+                        "\". Context: \"" +
+                        clean_line(context_of(text, candidates[(size_t) c].start,
+                                              candidates[(size_t) c].end)) +
+                        "\". Choose the exact entity type, or none if the mention is "
+                        "not an entity or is only a neighboring word.";
+        for (const auto & t : table.types) {
+            f.choices.push_back(t.id + ": " + (t.description.empty() ? "entity" : t.description));
+        }
+        f.choices.push_back("none");
+        tfields.push_back(std::move(f));
+    }
+
+    if (!tfields.empty()) {
+        const std::string policy = request.policy.empty() ? "none" : request.policy;
+        const std::string sys =
+            "You are a PII type classifier. A disease, symptom, action, or ordinary "
+            "word is not a drug, person, or organization unless a listed type "
+            "explicitly covers it. Use the most specific matching type; a generic "
+            "drug name and a brand name are different types when both are listed. "
+            "Policy:\n" + policy + "\n" + pcd_type_legend(table);
+        decode_fields(sys, tfields, [&](const PcdFieldResult & r, size_t idx) {
+            if (std::getenv("ANYPPI_DEBUG")) {
+                std::cerr << "[pcd-type] idx=" << idx << " mention=["
+                          << candidates[(size_t) t_cands[idx]].text << "] value=["
+                          << r.value << "] p=" << r.probability << "\n";
+            }
+            if (idx >= t_cands.size() || r.value == "none") return;
+            int type = -1;
+            for (int t = 0; t < type_count; ++t) {
+                const std::string prefix = table.types[(size_t) t].id + ":";
+                if (r.value.rfind(prefix, 0) == 0) { type = t; break; }
+            }
+            if (type < 0 || r.probability < request.threshold) return;
+            const int span_len = candidates[(size_t) t_cands[idx]].end -
+                                 candidates[(size_t) t_cands[idx]].start;
+            if (span_len <= options.none_margin_max_len) {
+                const double none_p = r.probabilities.empty() ? 0.0 : r.probabilities.back();
+                const double margin =
+                    table.types[(size_t) type].redact == RedactMode::Redact
+                        ? options.none_margin_redact
+                        : options.none_margin;
+                if (r.probability - none_p < margin) return;
+            }
+            if (request.skip_keep_types &&
+                table.types[(size_t) type].redact == RedactMode::Keep) {
+                return;
+            }
+            PhraseHit h;
+            h.start = candidates[(size_t) t_cands[idx]].start;
+            h.end = candidates[(size_t) t_cands[idx]].end;
+            h.text = candidates[(size_t) t_cands[idx]].text;
+            h.type = table.types[(size_t) type].id;
+            h.score = r.probability;
+            h.redacted = false;
+            hits.push_back(std::move(h));
+        });
+    }
+    }
+
+    if (hits.empty()) {
+        out.redacted_text = request.text;
+        return out;
+    }
+
+    // ---------- Redaction stage: only auto types ----------
+    std::vector<PcdField> rfields;
+    std::vector<int> r_hits;
+    for (size_t i = 0; i < hits.size(); ++i) {
+        const TypeDef * def = find_type(request, hits[i].type);
+        if (!def) continue;
+        if (def->redact == RedactMode::Redact) {
+            hits[i].redacted = true;
+            continue;
+        }
+        if (def->redact == RedactMode::Keep) {
+            hits[i].redacted = false;
+            continue;
+        }
+        PcdField f;
+        f.name = pcd_field_name(hits[i].text, (int) rfields.size());
+        f.description = "Mention: \"" + clean_line(hits[i].text) + "\". Type: " +
+                        hits[i].type + " (" + def->description +
+                        "). Should this mention be redacted under the Policy?";
+        f.choices = {"redact", "keep"};
+        rfields.push_back(std::move(f));
+        r_hits.push_back((int) i);
+    }
+    if (!rfields.empty()) {
+        const std::string policy = request.policy.empty() ? "none" : request.policy;
+        const std::string sys = "You are a PII redaction policy engine. Policy:\n" + policy;
+        decode_fields(sys, rfields, [&](const PcdFieldResult & r, size_t idx) {
+            if (std::getenv("ANYPPI_DEBUG")) {
+                std::cerr << "[pcd-redact] idx=" << idx << " mention=["
+                          << hits[(size_t) r_hits[idx]].text << "] value=[" << r.value
+                          << "] p=" << r.probability << "\n";
+            }
+            if (idx >= r_hits.size()) return;
+            double p_redact = 0.0;
+            for (size_t j = 0; j < r.probabilities.size() && j < rfields[idx].choices.size(); ++j) {
+                if (rfields[idx].choices[j] == "redact") {
+                    p_redact = r.probabilities[j];
+                    break;
+                }
+            }
+            PhraseHit & h = hits[(size_t) r_hits[idx]];
+            h.redact_score = p_redact;
+            h.redacted = p_redact >= request.threshold;
+        });
+    }
+
+    std::sort(hits.begin(), hits.end(), [](const PhraseHit & a, const PhraseHit & b) {
+        if (a.start != b.start) return a.start < b.start;
+        return a.end < b.end;
+    });
+    std::vector<PhraseHit> final_hits;
+    for (auto & h : hits) {
+        if (final_hits.empty() || h.start >= final_hits.back().end) {
+            final_hits.push_back(h);
+        } else if (h.score > final_hits.back().score) {
+            final_hits.back() = h;
+        }
+    }
+
+    emit_grouped(out, text, final_hits, request);
+    out.generated_tokens = 0;
+    return out;
+}
+
 AnyPiiResult run_pipeline(Engine & engine, const AnyPiiRequest & request,
                           const ResolveOptions & options) {
+    if (request.mode == "pcd") {
+        return run_pcd_pipeline(engine, request, options);
+    }
     AnyPiiResult out;
     out.model = engine.model_name();
     out.backend = engine.backend_name();

@@ -25,6 +25,8 @@ struct Args {
     double none_margin = 0.65;
     int none_margin_max_len = 4;
     double none_margin_redact = 0.20;
+    int pcd_cache_entries = 4;
+    size_t pcd_cache_bytes = 256ull * 1024 * 1024;
 };
 
 void usage(const char * argv0) {
@@ -48,6 +50,8 @@ void usage(const char * argv0) {
         << "  --none-margin M     minimum P(type)-P(none) margin (default 0.65)\n"
         << "  --none-margin-max-len N  apply the margin to spans up to N code points (default 4)\n"
         << "  --none-margin-redact M   margin for redact:true types (default 0.20)\n"
+        << "  --pcd-cache-entries N    PCD prefix checkpoint entries (default 4)\n"
+        << "  --pcd-cache-bytes BYTES  PCD prefix checkpoint budget (default 256 MiB)\n"
         << "  --api-key KEY       require Authorization: Bearer KEY\n"
         << "  --help              show this help\n";
 }
@@ -106,6 +110,10 @@ Args parse_args(int argc, char ** argv) {
             a.none_margin_max_len = std::stoi(need("--none-margin-max-len"));
         } else if (arg == "--none-margin-redact") {
             a.none_margin_redact = std::stod(need("--none-margin-redact"));
+        } else if (arg == "--pcd-cache-entries") {
+            a.pcd_cache_entries = std::stoi(need("--pcd-cache-entries"));
+        } else if (arg == "--pcd-cache-bytes") {
+            a.pcd_cache_bytes = (size_t) std::stoull(need("--pcd-cache-bytes"));
         } else if (arg == "--api-key") {
             a.api_key = need("--api-key");
         } else {
@@ -147,6 +155,8 @@ int main(int argc, char ** argv) {
         sopts.none_margin = args.none_margin;
         sopts.none_margin_max_len = args.none_margin_max_len;
         sopts.none_margin_redact = args.none_margin_redact;
+        sopts.pcd_cache_entries = args.pcd_cache_entries;
+        sopts.pcd_cache_bytes = args.pcd_cache_bytes;
         anypii::run_server(engine, sopts);
     } catch (const std::exception & e) {
         std::cerr << "error: " << e.what() << "\n";
