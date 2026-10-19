@@ -81,7 +81,7 @@ curl http://127.0.0.1:8080/v1/anypii -H 'Content-Type: application/json' -d @exa
 执行，也不为每个候选单独执行前向。
 
 ```mermaid
-flowchart TD
+flowchart LR
     A["state.text + state.policy + types"] --> B["候选生成<br/>tokenizer 边界 + 相邻 token 合并<br/>+ 正则例外"]
     B --> C{"语言预过滤<br/>单字、提示词片段、<br/>停用词、疾病词"}
     C -->|格式/长度快速路径| D["直接确定类型<br/>0 次模型调用"]
