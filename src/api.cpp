@@ -237,6 +237,7 @@ public:
         : max_entries_(std::max(0, max_entries)), max_bytes_(max_bytes) {}
 
     bool get(const std::string & key, AnyPiiResult & out) {
+        std::lock_guard<std::mutex> lock(mutex_);
         auto it = entries_.find(key);
         if (it == entries_.end()) return false;
         order_.splice(order_.begin(), order_, it->second.recency);
@@ -251,6 +252,7 @@ public:
     }
 
     void put(const std::string & key, const AnyPiiResult & result) {
+        std::lock_guard<std::mutex> lock(mutex_);
         if (max_entries_ <= 0 || max_bytes_ == 0) return;
         const size_t bytes = result_bytes(result);
         if (bytes > max_bytes_) return;
@@ -282,9 +284,13 @@ public:
         entries_[key] = std::move(entry);
     }
 
-    size_t entries() const { return entries_.size(); }
+    size_t entries() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return entries_.size();
+    }
 
 private:
+    mutable std::mutex mutex_;
     int max_entries_;
     size_t max_bytes_;
     size_t used_ = 0;
@@ -359,8 +365,18 @@ void run_server(Engine & engine, const ServerOptions & options) {
             return;
         }
 
+        const std::string cache_key = result_cache_key(engine, request);
+        AnyPiiResult cached_result;
+        if (result_cache.get(cache_key, cached_result)) {
+            res.set_content(to_json(cached_result).dump(), "application/json; charset=utf-8");
+            return;
+        }
         try {
             std::lock_guard<std::mutex> lock(engine_mutex);
+            if (result_cache.get(cache_key, cached_result)) {
+                res.set_content(to_json(cached_result).dump(), "application/json; charset=utf-8");
+                return;
+            }
             ResolveOptions ropts;
             ropts.max_branches_per_decode = options.max_branches;
             ropts.max_text_cp = options.max_text_cp;
@@ -370,14 +386,10 @@ void run_server(Engine & engine, const ServerOptions & options) {
             ropts.none_margin_max_len = options.none_margin_max_len;
             ropts.none_margin_redact = options.none_margin_redact;
             ropts.pcd = &pcd;
-            const std::string cache_key = result_cache_key(engine, request);
-            AnyPiiResult result;
-            if (!result_cache.get(cache_key, result)) {
-                result = run_pipeline(engine, request, ropts);
-                result.result_cache_status = "miss";
-                result_cache.put(cache_key, result);
-                result.result_cache_entries = result_cache.entries();
-            }
+            AnyPiiResult result = run_pipeline(engine, request, ropts);
+            result.result_cache_status = "miss";
+            result_cache.put(cache_key, result);
+            result.result_cache_entries = result_cache.entries();
             res.set_content(to_json(result).dump(), "application/json; charset=utf-8");
         } catch (const std::invalid_argument & e) {
             send_error(res, 400, e.what());
