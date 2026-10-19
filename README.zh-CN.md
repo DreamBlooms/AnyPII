@@ -80,6 +80,30 @@ curl http://127.0.0.1:8080/v1/anypii -H 'Content-Type: application/json' -d @exa
 分支按批进行多序列 decode（`--max-branches`，默认 32）。推理不按 token 逐个
 执行，也不为每个候选单独执行前向。
 
+```mermaid
+flowchart TD
+    A["state.text + state.policy + types"] --> B["候选生成<br/>tokenizer 边界 + 相邻 token 合并<br/>+ 正则例外"]
+    B --> C{"语言预过滤<br/>单字、提示词片段、<br/>停用词、疾病词"}
+    C -->|格式/长度快速路径| D["直接确定类型<br/>0 次模型调用"]
+    C -->|保留| E["Pass A：类型读取<br/>共享 evidence 前缀<br/>每个唯一候选一条分支<br/>对类型 + none 做受限 softmax"]
+    E --> F["将重叠候选<br/>组合为组件"]
+    F --> G["边界裁决<br/>最强候选 + 最长变体<br/>正反两种顺序"]
+    G --> H{"高置信或<br/>描述/格式先验?"}
+    H -->|是| J["选定实体片段"]
+    H -->|否| I["类型精修<br/>在描述驱动的<br/>候选类型集合上成对读取"]
+    I --> J
+    D --> J
+    J --> K{"打码模式"}
+    K -->|true / false| L["强制打码判定"]
+    K -->|auto| M["Pass C：打码/保留读取"]
+    L --> N["消除重叠<br/>按 type + text + redacted 合并"]
+    M --> N
+    N --> O["应用 mask_style<br/>token / length / mask / typed"]
+```
+
+共享前缀是主要开销：每次请求只解码一次，每个判定只追加很短的 branch tail。
+所有阶段都只做 prefill，因此开销随判定分支数量增长，而不随生成 token 数增长。
+
 坐标以原始字符串为基准：`start`/`end` 是 Unicode **code point** 下标，半开区间
 `[start, end)`。出现位置互不重叠，并按 `start` 升序排列；同一 `(type, text,
 redacted)` 的多次出现会合并为一个 span。
@@ -104,17 +128,22 @@ redacted)` 的多次出现会合并为一个 span。
 
 ## 构建
 
-需要 CMake 3.20+ 和 C++20 编译器。默认 `LLAMA_DIR` 指向本机
-`../ifreflex.cpp/third_party/llama.cpp`；也可使用未修改的上游 llama.cpp v0.6.0，
-因为 AnyPII 只使用公开的 `llama.h` API。
+需要 CMake 3.20+、Git 和 C++20 编译器。官方 llama.cpp **v0.6.0** 已作为
+`third_party/llama.cpp` 子模块固定，无需外部 checkout。
 
 ```sh
-cd /home/dohnuts/anypii
+git clone --recurse-submodules https://github.com/DreamBlooms/AnyPii-Readout.git
+cd AnyPii-Readout
 ./build.sh
-# 或者：
-# cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=ON \
-#   -DLLAMA_DIR=/path/to/llama.cpp
-# cmake --build build -j"$(nproc)"
+
+# 已有 checkout：
+git submodule update --init --recursive
+./build.sh
+
+# 或指向另一个上游 llama.cpp checkout：
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=ON \
+  -DLLAMA_DIR=/path/to/llama.cpp
+cmake --build build -j"$(nproc)"
 ```
 
 llama.cpp 与 ggml 静态链接，产物是单个 `build/anypii`（约 7 MB）。

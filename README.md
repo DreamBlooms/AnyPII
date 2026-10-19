@@ -95,6 +95,31 @@ restored for every pass, and branches are evaluated with multi-sequence decode i
 batches (`--max-branches`, default 32). No pass is per-token and no pass is
 per-candidate in the sense of one forward per candidate.
 
+```mermaid
+flowchart TD
+    A["state.text + state.policy + types"] --> B["Candidate proposal<br/>tokenizer boundaries + adjacent-token merges<br/>+ regex exceptions"]
+    B --> C{"Language prefilter<br/>single chars, cue fragments,<br/>stop words, disease words"}
+    C -->|format/length fast path| D["Direct type decision<br/>0 model calls"]
+    C -->|survives| E["Pass A: type readout<br/>shared evidence prefix<br/>one branch per unique candidate<br/>restricted softmax over type + none"]
+    E --> F["Group overlapping candidates<br/>into components"]
+    F --> G["Boundary arbitration<br/>top-1 + longest variant<br/>both option orders"]
+    G --> H{"High confidence or<br/>description/format prior?"}
+    H -->|yes| J["Selected entity spans"]
+    H -->|no| I["Type refinement<br/>pairwise readout over<br/>a description-driven shortlist"]
+    I --> J
+    D --> J
+    J --> K{"redact mode"}
+    K -->|true / false| L["Forced redaction decision"]
+    K -->|auto| M["Pass C: redact/keep readout"]
+    L --> N["Enforce non-overlap<br/>merge by type + text + redacted"]
+    M --> N
+    N --> O["Apply mask_style<br/>token / length / mask / typed"]
+```
+
+The shared prefix is the expensive part: it is decoded once per request, while
+each decision only adds a short branch tail. Every pass is prefill-only, so the
+cost scales with the number of decision branches, not with generated tokens.
+
 Coordinates follow the original string: `start`/`end` are Unicode **code point**
 indices, half-open `[start, end)`. Occurrences are non-overlapping and sorted by
 `start`. Repeated occurrences of the same `(type, text, redacted)` are merged into
@@ -121,17 +146,23 @@ If every type is keep, the request returns the original text with zero decodes.
 
 ## Build
 
-Requires CMake 3.20+ and a C++20 compiler. The default `LLAMA_DIR` points at the
-local `../ifreflex.cpp/third_party/llama.cpp` checkout; a clean upstream
-llama.cpp v0.6.0 works because AnyPII uses only the public `llama.h` API.
+Requires CMake 3.20+, Git, and a C++20 compiler. The official llama.cpp
+**v0.6.0** is pinned as the `third_party/llama.cpp` submodule, so no external
+checkout is needed.
 
 ```sh
-cd /home/dohnuts/anypii
+git clone --recurse-submodules https://github.com/DreamBlooms/AnyPii-Readout.git
+cd AnyPii-Readout
 ./build.sh
-# or:
-# cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=ON \
-#   -DLLAMA_DIR=/path/to/llama.cpp
-# cmake --build build -j"$(nproc)"
+
+# Existing checkout:
+git submodule update --init --recursive
+./build.sh
+
+# Or point at another upstream llama.cpp checkout:
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=ON \
+  -DLLAMA_DIR=/path/to/llama.cpp
+cmake --build build -j"$(nproc)"
 ```
 
 llama.cpp and ggml are linked statically; the result is a single
