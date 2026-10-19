@@ -98,7 +98,7 @@ batches (`--max-branches`, default 32). No pass is per-token and no pass is
 per-candidate in the sense of one forward per candidate.
 
 ```mermaid
-flowchart TD
+flowchart LR
     A["state.text + state.policy + types"] --> B["Candidate proposal<br/>tokenizer boundaries + adjacent-token merges<br/>+ regex exceptions"]
     B --> C{"Language prefilter<br/>single chars, cue fragments,<br/>stop words, disease words"}
     C -->|format/length fast path| D["Direct type decision<br/>0 model calls"]
