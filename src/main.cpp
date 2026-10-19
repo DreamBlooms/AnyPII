@@ -1,9 +1,12 @@
+#include <cctype>
 #include <cstdlib>
 #include <iostream>
 #include <string>
+#include <vector>
 
 #include "anypii/api.hpp"
 #include "anypii/engine.hpp"
+#include "anypii/segment.hpp"
 
 namespace {
 
@@ -29,7 +32,28 @@ struct Args {
     size_t pcd_cache_bytes = 256ull * 1024 * 1024;
     int readout_cache_entries = 4;
     size_t readout_cache_bytes = 256ull * 1024 * 1024;
+    std::string weak_pos;
+    std::string weak_pos_override;
 };
+
+std::vector<std::string> split_tags(const std::string & text) {
+    std::vector<std::string> out;
+    size_t start = 0;
+    while (start <= text.size()) {
+        const size_t end = text.find(',', start);
+        std::string tag = text.substr(
+            start, end == std::string::npos ? std::string::npos : end - start);
+        size_t a = 0;
+        while (a < tag.size() && std::isspace((unsigned char) tag[a])) ++a;
+        size_t b = tag.size();
+        while (b > a && std::isspace((unsigned char) tag[b - 1])) --b;
+        tag = tag.substr(a, b - a);
+        if (!tag.empty()) out.push_back(std::move(tag));
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+    return out;
+}
 
 void usage(const char * argv0) {
     std::cout
@@ -56,6 +80,8 @@ void usage(const char * argv0) {
         << "  --pcd-cache-bytes BYTES  PCD prefix checkpoint budget (default 256 MiB)\n"
         << "  --readout-cache-entries N  readout prefix checkpoint entries (default 4)\n"
         << "  --readout-cache-bytes BYTES readout prefix checkpoint budget (default 256 MiB)\n"
+        << "  --weak-pos LIST     append jieba POS tags to the weak boundary set\n"
+        << "  --weak-pos-override LIST  replace the weak boundary set (use none to clear)\n"
         << "  --api-key KEY       require Authorization: Bearer KEY\n"
         << "  --help              show this help\n";
 }
@@ -122,6 +148,10 @@ Args parse_args(int argc, char ** argv) {
             a.readout_cache_entries = std::stoi(need("--readout-cache-entries"));
         } else if (arg == "--readout-cache-bytes") {
             a.readout_cache_bytes = (size_t) std::stoull(need("--readout-cache-bytes"));
+        } else if (arg == "--weak-pos") {
+            a.weak_pos = need("--weak-pos");
+        } else if (arg == "--weak-pos-override") {
+            a.weak_pos_override = need("--weak-pos-override");
         } else if (arg == "--api-key") {
             a.api_key = need("--api-key");
         } else {
@@ -136,6 +166,16 @@ Args parse_args(int argc, char ** argv) {
 int main(int argc, char ** argv) {
     try {
         const Args args = parse_args(argc, argv);
+        std::string weak_append = args.weak_pos;
+        std::string weak_override = args.weak_pos_override;
+        if (weak_append.empty()) {
+            if (const char * env = std::getenv("ANYPPI_WEAK_POS")) weak_append = env;
+        }
+        if (weak_override.empty()) {
+            if (const char * env = std::getenv("ANYPPI_WEAK_POS_OVERRIDE")) weak_override = env;
+        }
+        anypii::configure_weak_pos(split_tags(weak_append), split_tags(weak_override));
+
         anypii::EngineOptions eopts;
         eopts.model_path = args.model;
         eopts.n_ctx = args.ctx;

@@ -147,6 +147,36 @@ redacted)` 的多次出现会合并为一个 span。
 并省略其输出，同时直接跳过格式匹配的保留类型候选（例如工单号），不产生 span。
 若所有类型均为保留类型，则直接返回原文，不执行 decode。
 
+## 降权词性标签
+
+中文候选边界使用 jieba 词性。默认以下标签（单字符标签会同时覆盖其子类）降权：
+
+```text
+v a d p r u m q t f c y e o z l i w b g h k
+```
+
+- `v` 覆盖 `vd`、`vg`、`vi`、`vn`、`vq`；`u` 覆盖 `ud`、`ug`、`uj`、`ul`、
+  `uv`、`uz`；`a`、`d`、`m`、`r`、`t` 同理。
+- 多字符自定义标签为精确匹配（例如 `vn` 不会降权其他动词子类）。
+- 默认保持强边界：`n`、`ng`、`nr`、`nrfg`、`nrt`、`ns`、`nt`、`nz`
+  （名词、人名、地名、机构名），`j`（简称可能是实体）、`s`（处所词可能是地址）、
+  `x`（未知词，常为人名）、`eng`（英文）。
+
+启动时可自定义：
+
+```sh
+# 追加
+./build/anypii --weak-pos vn,uj ...
+
+# 覆盖默认值
+./build/anypii --weak-pos-override v,n ...
+
+# 清空
+./build/anypii --weak-pos-override none ...
+```
+
+也可用环境变量 `ANYPPI_WEAK_POS` 和 `ANYPPI_WEAK_POS_OVERRIDE`。
+
 ## 温度与置信度
 
 `--temperature` 会在 softmax 前缩放受限 logits。它影响 readout 路径、PCD 的
@@ -249,6 +279,8 @@ CUDA 交叉编译时可用 `-DCMAKE_CUDA_ARCHITECTURES=89` 指定目标架构。
 --pcd-cache-bytes BYTES  PCD 前缀 checkpoint 预算（默认 256 MiB）
 --readout-cache-entries N  readout 前缀 checkpoint 条目数（默认 4）
 --readout-cache-bytes BYTES readout 前缀 checkpoint 预算（默认 256 MiB）
+--weak-pos LIST     追加 jieba 降权词性标签
+--weak-pos-override LIST  覆盖降权词性集合（none 表示清空）
 --api-key KEY       要求 Authorization: Bearer KEY
 --help              显示帮助
 ```

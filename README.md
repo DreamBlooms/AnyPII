@@ -170,6 +170,38 @@ boundary/type refinement and output for keep-only components, and consumes
 format-matched keep candidates (e.g. a ticket number) without emitting spans.
 If every type is keep, the request returns the original text with zero decodes.
 
+## Weakened POS tags
+
+CJK candidate boundaries use jieba POS tags. By default these tags (and their
+subclasses, because single-character tags match by prefix) are weak:
+
+```text
+v a d p r u m q t f c y e o z l i w b g h k
+```
+
+- `v` covers `vd`, `vg`, `vi`, `vn`, `vq`; `u` covers `ud`, `ug`, `uj`, `ul`,
+  `uv`, `uz`; `a`, `d`, `m`, `r`, `t` behave the same way.
+- Multi-character custom tags match exactly (`vn` does not weaken other verbs).
+- Kept strong by default: `n`, `ng`, `nr`, `nrfg`, `nrt`, `ns`, `nt`, `nz`
+  (nouns, names, places, organizations), `j` (abbreviations may be entities),
+  `s` (locative words may be addresses), `x` (unknown, often names), and `eng`.
+
+Customize the set at startup:
+
+```sh
+# append tags
+./build/anypii --weak-pos vn,uj ...
+
+# replace the defaults
+./build/anypii --weak-pos-override v,n ...
+
+# clear all weak tags
+./build/anypii --weak-pos-override none ...
+```
+
+`ANYPPI_WEAK_POS` and `ANYPPI_WEAK_POS_OVERRIDE` provide the same values via
+environment variables.
+
 ## Temperature and confidence
 
 `--temperature` scales the restricted logits before softmax. It affects the
@@ -205,9 +237,9 @@ passes, cache status, checkpoint bytes, and phase timings. Readout requests expo
 checkpoint LRU (`--readout-cache-entries`, `--readout-cache-bytes`) through
 `usage.readout`.
 
-### Parrot / 复读机 mode
+### Parrot (repeater) mode
 
-`mode: "parrot"` (alias `"复读机"`) is a type-free token-level PCD prototype.
+`mode: "parrot"` is a type-free token-level PCD prototype.
 It creates one field per token with choices `copy` / `REDACTED`, merges
 consecutive redacted tokens, and returns type `"redacted"`. `types` is optional
 and ignored unless `parrot_typed` is true; the text must be
@@ -285,6 +317,8 @@ the target with `-DCMAKE_CUDA_ARCHITECTURES=89`.
 --pcd-cache-bytes BYTES  PCD prefix checkpoint budget (default 256 MiB)
 --readout-cache-entries N  readout prefix checkpoint entries (default 4)
 --readout-cache-bytes BYTES readout prefix checkpoint budget (default 256 MiB)
+--weak-pos LIST     append jieba POS tags to the weak boundary set
+--weak-pos-override LIST  replace the weak boundary set (use none to clear)
 --api-key KEY       require Authorization: Bearer KEY
 --help              show this help
 ```
@@ -304,7 +338,7 @@ Request:
 | `mask_style` | `"token"` (`[REDACTED]`), `"length"` (`█` per code point), `"type"` (`[type]`), or `"typed"` (`[type:index]`); `"mask"` is an alias for length |
 | `skip_keep_types` | optional; skip keep-only detection/refinement/output |
 | `parrot_typed` | optional; in `parrot` mode use type ids as token choices instead of `REDACTED` (requires `types`) |
-| `mode` | `"readout"` (default), `"pcd"` (experimental), or `"parrot"`/`"复读机"` (experimental token-level) |
+| `mode` | `"readout"` (default), `"pcd"` (experimental), or `"parrot"` (experimental token-level) |
 | `fallback` | optional; reserved for a future constrained-decoding path |
 
 Response:
@@ -342,7 +376,7 @@ The test script starts and stops its own server on a random port. It covers:
 - exact medical and contact outputs;
 - NIST regex fast path (SSN, ITIN, EIN, payment card, IBAN, IPv6, date of birth) with zero decodes;
 - readout and PCD prefix-checkpoint cache hits;
-- parrot/复读机 mode plumbing, typed parrot, and `mask_style: "type"`;
+- parrot mode plumbing, typed parrot, and `mask_style: "type"`;
 - `redact` flip;
 - equal-length and typed masking;
 - auto redaction;
