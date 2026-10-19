@@ -137,7 +137,8 @@ def test_nist_fast_path(c):
             "text": (
                 "SSN 123-45-6789; ITIN 912-70-1234; EIN 12-3456789; "
                 "card 4111 1111 1111 1111; IBAN GB82WEST12345698765432; "
-                "IP 2001:db8::1; DOB 1990-01-31."
+                "IP 2001:db8::1; DOB 1990-01-31; NPI 1234567893; "
+                "MBI 1EG4TE5MK73; DEA AB1234563; VIN 1HGCM82633A004352."
             ),
             "policy": "Redact all of these.",
         },
@@ -149,13 +150,18 @@ def test_nist_fast_path(c):
             "iban": {"description": "International Bank Account Number", "redact": True},
             "ip_address": {"description": "IP address", "redact": True},
             "date_of_birth": {"description": "Date of birth", "redact": True},
+            "npi": {"description": "National Provider Identifier", "redact": True},
+            "mbi": {"description": "Medicare Beneficiary Identifier", "redact": True},
+            "dea": {"description": "DEA registration number", "redact": True},
+            "vin": {"description": "Vehicle Identification Number", "redact": True},
         },
     }
     r = c.post(req)
     assert r["usage"]["decodes"] == 0, r["usage"]
     expected = (
         "SSN [REDACTED]; ITIN [REDACTED]; EIN [REDACTED]; card [REDACTED]; "
-        "IBAN [REDACTED]; IP [REDACTED]; DOB [REDACTED]."
+        "IBAN [REDACTED]; IP [REDACTED]; DOB [REDACTED]; NPI [REDACTED]; "
+        "MBI [REDACTED]; DEA [REDACTED]; VIN [REDACTED]."
     )
     assert r["redacted_text"] == expected, r["redacted_text"]
     got = {(s["type"], s["text"]) for s in r["spans"]}
@@ -166,6 +172,10 @@ def test_nist_fast_path(c):
     assert ("iban", "GB82WEST12345698765432") in got
     assert ("ip_address", "2001:db8::1") in got
     assert ("date_of_birth", "1990-01-31") in got
+    assert ("npi", "1234567893") in got
+    assert ("mbi", "1EG4TE5MK73") in got
+    assert ("dea", "AB1234563") in got
+    assert ("vin", "1HGCM82633A004352") in got
     print("ok NIST fast path")
 
 

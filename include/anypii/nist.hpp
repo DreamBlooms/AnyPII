@@ -26,6 +26,10 @@ enum class PiiFormat {
     Ticket,
     CaseNumber,
     Dob,
+    Npi,
+    Mbi,
+    Dea,
+    Vin,
     Digits,
 };
 

@@ -44,6 +44,8 @@ const std::vector<CompiledPattern> & compiled_patterns() {
           1.20, PiiFormat::Dob},
          std::regex(R"((?:19|20)[0-9]{2}[-/.](?:0[1-9]|1[0-2])[-/.](?:0[1-9]|[12][0-9]|3[01]))",
                     std::regex::optimize)},
+        {{R"([0-9]{10})", 1.25, PiiFormat::Npi},
+         std::regex(R"([0-9]{10})", std::regex::optimize)},
         {{R"((?:\+?86[- ]?)?1[3-9][0-9]{9})", 1.30, PiiFormat::Phone},
          std::regex(R"((?:\+?86[- ]?)?1[3-9][0-9]{9})", std::regex::optimize)},
         {{R"(\+?[0-9][0-9 ()\-]{7,}[0-9])", 1.25, PiiFormat::Phone},
@@ -51,6 +53,15 @@ const std::vector<CompiledPattern> & compiled_patterns() {
         {{R"([A-Za-z]{1,6}[-_][A-Za-z0-9]{2,}(?:[-_][A-Za-z0-9]+)*)", 1.25, PiiFormat::Ticket},
          std::regex(R"([A-Za-z]{1,6}[-_][A-Za-z0-9]{2,}(?:[-_][A-Za-z0-9]+)*)",
                     std::regex::optimize)},
+        {{R"([1-9][A-Za-z][A-Za-z0-9][0-9][A-Za-z][A-Za-z0-9][0-9][A-Za-z]{2}[0-9]{2})",
+          1.30, PiiFormat::Mbi},
+         std::regex(
+             R"([1-9][A-Za-z][A-Za-z0-9][0-9][A-Za-z][A-Za-z0-9][0-9][A-Za-z]{2}[0-9]{2})",
+             std::regex::optimize)},
+        {{R"([A-Za-z]{2}[0-9]{7})", 1.25, PiiFormat::Dea},
+         std::regex(R"([A-Za-z]{2}[0-9]{7})", std::regex::optimize)},
+        {{R"([A-HJ-NPR-Z0-9]{17})", 1.25, PiiFormat::Vin},
+         std::regex(R"([A-HJ-NPR-Z0-9]{17})", std::regex::optimize)},
         {{R"([0-9]{5,19})", 1.20, PiiFormat::Digits},
          std::regex(R"([0-9]{5,19})", std::regex::optimize)},
         {{R"([A-Za-z0-9_-]{24,})", 1.10, PiiFormat::None},
@@ -165,6 +176,105 @@ bool valid_iban(const std::string & s) {
     return mod == 1;
 }
 
+bool valid_npi(const std::string & s) {
+    if (s.size() != 10 || !is_ascii_digits(s)) return false;
+    const std::string prefixed = "80840" + s;
+    int sum = 0;
+    bool dbl = false;
+    for (auto it = prefixed.rbegin(); it != prefixed.rend(); ++it) {
+        int d = *it - '0';
+        if (dbl) {
+            d *= 2;
+            if (d > 9) d -= 9;
+        }
+        sum += d;
+        dbl = !dbl;
+    }
+    return sum % 10 == 0;
+}
+
+bool valid_mbi(const std::string & s) {
+    if (s.size() != 11) return false;
+    auto is_digit = [](char c) { return c >= '0' && c <= '9'; };
+    auto is_alpha = [](char c) {
+        return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+    };
+    auto allowed_alpha = [](char c) {
+        const char u = (char) std::toupper((unsigned char) c);
+        return u >= 'A' && u <= 'Z' && u != 'S' && u != 'L' && u != 'O' &&
+               u != 'I' && u != 'B' && u != 'Z';
+    };
+    for (int i : {0, 3, 6, 9, 10}) {
+        if (!is_digit(s[(size_t) i])) return false;
+    }
+    for (int i : {1, 4, 7, 8}) {
+        if (!is_alpha(s[(size_t) i]) || !allowed_alpha(s[(size_t) i])) return false;
+    }
+    for (int i : {2, 5}) {
+        if (!is_digit(s[(size_t) i]) &&
+            !(is_alpha(s[(size_t) i]) && allowed_alpha(s[(size_t) i]))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool valid_dea(const std::string & s) {
+    if (s.size() != 9) return false;
+    for (int i = 0; i < 2; ++i) {
+        if (!std::isalpha((unsigned char) s[(size_t) i])) return false;
+    }
+    for (int i = 2; i < 9; ++i) {
+        if (!std::isdigit((unsigned char) s[(size_t) i])) return false;
+    }
+    const int check = (s[2] - '0') + (s[4] - '0') + (s[6] - '0') +
+                      2 * ((s[3] - '0') + (s[5] - '0') + (s[7] - '0'));
+    return check % 10 == (s[8] - '0');
+}
+
+bool valid_vin(const std::string & s) {
+    if (s.size() != 17) return false;
+    static const int weights[17] = {8, 7, 6, 5, 4, 3, 2, 10, 0, 9, 8, 7, 6, 5, 4, 3, 2};
+    int sum = 0;
+    for (size_t i = 0; i < s.size(); ++i) {
+        const char c = (char) std::toupper((unsigned char) s[i]);
+        int value = -1;
+        if (c >= '0' && c <= '9') value = c - '0';
+        else {
+            switch (c) {
+                case 'A': value = 1; break;
+                case 'B': value = 2; break;
+                case 'C': value = 3; break;
+                case 'D': value = 4; break;
+                case 'E': value = 5; break;
+                case 'F': value = 6; break;
+                case 'G': value = 7; break;
+                case 'H': value = 8; break;
+                case 'J': value = 1; break;
+                case 'K': value = 2; break;
+                case 'L': value = 3; break;
+                case 'M': value = 4; break;
+                case 'N': value = 5; break;
+                case 'P': value = 7; break;
+                case 'R': value = 9; break;
+                case 'S': value = 2; break;
+                case 'T': value = 3; break;
+                case 'U': value = 4; break;
+                case 'V': value = 5; break;
+                case 'W': value = 6; break;
+                case 'X': value = 7; break;
+                case 'Y': value = 8; break;
+                case 'Z': value = 9; break;
+                default: return false;
+            }
+        }
+        sum += value * weights[i];
+    }
+    const int remainder = sum % 11;
+    const char expected = remainder == 10 ? 'X' : (char) ('0' + remainder);
+    return s[8] == expected;
+}
+
 bool format_valid(PiiFormat fmt, const std::string & s) {
     switch (fmt) {
         case PiiFormat::Ssn:
@@ -179,6 +289,14 @@ bool format_valid(PiiFormat fmt, const std::string & s) {
         }
         case PiiFormat::Iban:
             return valid_iban(s);
+        case PiiFormat::Npi:
+            return valid_npi(s);
+        case PiiFormat::Mbi:
+            return valid_mbi(s);
+        case PiiFormat::Dea:
+            return valid_dea(s);
+        case PiiFormat::Vin:
+            return valid_vin(s);
         case PiiFormat::Ip:
             return s.find(':') != std::string::npos ? valid_ipv6(s) : valid_ipv4(s);
         default:
@@ -280,6 +398,14 @@ bool type_matches_format(PiiFormat format, const TypeDef & type) {
             return has("case number") || has("case") || has("docket");
         case PiiFormat::Dob:
             return has("date of birth") || has("dob") || has("birthdate");
+        case PiiFormat::Npi:
+            return has("npi") || has("national provider identifier");
+        case PiiFormat::Mbi:
+            return has("mbi") || has("medicare beneficiary");
+        case PiiFormat::Dea:
+            return has("dea") || has("drug enforcement administration");
+        case PiiFormat::Vin:
+            return has("vin") || has("vehicle identification number");
         default:
             return false;
     }

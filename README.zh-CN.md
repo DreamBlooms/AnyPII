@@ -78,7 +78,8 @@ curl -s http://127.0.0.1:8080/v1/anypii \
 
 1. **候选生成。** 中文文本由 cppjieba 提供词边界与词性，并在相邻词之间合并以恢复
    多词姓名；词典不可用时回退到模型 tokenizer。拉丁文本按字符类切分并合并相邻词。
-   候选还包括邮箱、URL、电话、长数字、工单/订单号、IPv4、API key、案号等正则例外。
+   候选还包括邮箱、URL、电话、SSN/ITIN/EIN、支付卡（Luhn）、IBAN（mod-97）、
+   IPv4/IPv6、NPI/MBI/DEA/VIN、工单/订单号、API key、案号与出生日期等正则例外。
    预过滤会排除单字、与调用方类型标签匹配的片段（类型 id/说明中的单词、缩写或
    2-6 字子串）、跨越标点的片段、紧邻结构化正则值的短词，以及首/尾/内部词性为
    动词、助词、介词、副词、数词、时间词等的 CJK 片段。拉丁多词姓名仅在两个词都
@@ -135,7 +136,7 @@ redacted)` 的多次出现会合并为一个 span。
 
 | 路径 | 条件 | 模型调用 |
 | --- | --- | --- |
-| 格式 | 正则命中的 NIST 格式名恰好匹配一个类型 id/说明（邮箱、电话、SSN、ITIN、EIN、支付卡、IBAN、IP、URL、API key、工单、案号、出生日期） | 0 |
+| 格式 | 正则命中的 NIST 格式名恰好匹配一个类型 id/说明（邮箱、电话、SSN、ITIN、EIN、支付卡、IBAN、IP、URL、API key、工单、案号、出生日期、NPI、MBI、DEA、VIN） | 0 |
 | 长度 | 数字候选的长度恰好出现在唯一类型说明中（`18位身份证号`、`16-19位银行卡号`） | 0 |
 | 高置信 | Pass A 的概率与领先幅度达到跳过阈值 | 类型精修 0 次 |
 | 描述先验 | 长度或 2 字以上描述重叠已足以确定类型 | 类型精修 0 次 |
@@ -351,7 +352,7 @@ python3 tests/test_anypii.py
 测试脚本会在随机端口启动并停止服务，覆盖：
 
 - 医疗与联系信息的精确输出；
-- NIST 正则快速路径（SSN、ITIN、EIN、支付卡、IBAN、IPv6、出生日期），零 decode；
+- NIST 正则快速路径（SSN、ITIN、EIN、支付卡、IBAN、IPv6、出生日期、NPI、MBI、DEA、VIN），零 decode；
 - readout 与 PCD 的 prefix-checkpoint 缓存命中；
 - parrot/复读机 模式管线、typed parrot 与 `mask_style: "type"`；
 - 相同请求结果缓存；

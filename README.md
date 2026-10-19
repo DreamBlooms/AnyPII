@@ -89,8 +89,8 @@ Everything is **prefill only** — there is no autoregressive loop and no
    dictionary is unavailable, the model tokenizer is used as a fallback. Latin
    runs use character classes and adjacent-word merges. Regex exceptions for emails, URLs,
    phone numbers, SSN/ITIN/EIN, payment cards (Luhn), IBAN (mod-97), IPv4/IPv6,
-   ticket/order numbers, API keys, case numbers and dates of birth, plus generic
-   long digits and high-entropy tokens. A prefilter drops single characters,
+   NPI/MBI/DEA/VIN, ticket/order numbers, API keys, case numbers and dates of
+   birth, plus generic long digits and high-entropy tokens. A prefilter drops single characters,
    spans that match a caller type label (words, acronyms, or 2-6 character
    substrings of the type ids/descriptions), spans that cross punctuation,
    short words immediately adjacent to a structured regex value, and CJK spans
@@ -158,7 +158,7 @@ The model is not called when the answer is already determined by the request:
 
 | path | condition | model calls |
 | --- | --- | --- |
-| format | regex hit whose NIST format name matches exactly one type id/description (email, phone, SSN, ITIN, EIN, payment card, IBAN, IP, URL, API key, ticket, case number, DOB) | 0 |
+| format | regex hit whose NIST format name matches exactly one type id/description (email, phone, SSN, ITIN, EIN, payment card, IBAN, IP, URL, API key, ticket, case number, DOB, NPI, MBI, DEA, VIN) | 0 |
 | length | digit candidate whose length appears in exactly one type description (`18位身份证号`, `16-19位银行卡号`) | 0 |
 | high confidence | Pass A margin and probability clear the skip threshold | 0 for type refinement |
 | description prior | a length or 2+ char description overlap determines the type | 0 for type refinement |
@@ -394,7 +394,7 @@ python3 tests/test_anypii.py
 The test script starts and stops its own server on a random port. It covers:
 
 - exact medical and contact outputs;
-- NIST regex fast path (SSN, ITIN, EIN, payment card, IBAN, IPv6, date of birth) with zero decodes;
+- NIST regex fast path (SSN, ITIN, EIN, payment card, IBAN, IPv6, date of birth, NPI, MBI, DEA, VIN) with zero decodes;
 - readout and PCD prefix-checkpoint cache hits;
 - parrot mode plumbing, typed parrot, and `mask_style: "type"`;
 - identical-request result cache;
