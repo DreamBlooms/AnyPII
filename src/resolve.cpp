@@ -165,11 +165,20 @@ bool is_type_label(const Utf8Text & text, const std::vector<TypeDef> & types,
             if (acronym.size() >= 2 && acronym == needle) return true;
         }
     }
+    // A label is typically a prefix ("患者李小明", "商品名阿莫仙") or a very
+    // short suffix ("的身份证号"). Do not reject a longer entity merely because
+    // it contains a category word ("辉瑞制药", "北京星河科技有限公司").
     const int max_len = std::min(6, text.size());
     for (int len = 2; len <= max_len; ++len) {
-        for (int start = 0; start + len <= text.size(); ++start) {
-            if (ngrams.count(text.cps.substr((size_t) start, (size_t) len))) return true;
+        if (len == text.size() && ngrams.count(text.cps)) return true;
+        if (len < text.size() && ngrams.count(text.cps.substr(0, (size_t) len))) {
+            return true;
         }
+    }
+    for (int len = 2; len <= max_len; ++len) {
+        const int prefix = text.size() - len;
+        if (prefix > 1) continue;
+        if (ngrams.count(text.cps.substr((size_t) prefix, (size_t) len))) return true;
     }
     return false;
 }
@@ -292,7 +301,15 @@ AnyPiiResult run_pipeline(Engine & engine, const AnyPiiRequest & request,
     for (const auto & c : proposed) {
         if (!c.regex_hit) {
             if (c.end - c.start <= 1) continue;
+            if (!c.pos_ok) continue;
             if (is_type_label(decode_utf8(c.text), request.types, type_label_ngrams)) continue;
+            // Do not start in the middle of a caller type-label bigram
+            // (for example "名阿莫仙" after "商品名").
+            if (c.start > 0) {
+                const std::u32string pair{
+                    text.cps[(size_t) c.start - 1], text.cps[(size_t) c.start]};
+                if (type_label_ngrams.count(pair)) continue;
+            }
             if (boundary_factor(c.text) < 0.75) continue;
         }
         bool already_consumed = false;
@@ -458,8 +475,15 @@ AnyPiiResult run_pipeline(Engine & engine, const AnyPiiRequest & request,
                 }
             }
             cs.none_p = p[(size_t) type_count];
-            if (cs.best < 0 || cs.none_p >= cs.bestp ||
-                cs.bestp - cs.none_p < options.none_margin) {
+            const int cand_len = cand.end - cand.start;
+            const bool apply_margin = cand_len <= options.none_margin_max_len;
+            const double margin =
+                (cs.best >= 0 && table.types[(size_t) cs.best].redact == RedactMode::Redact)
+                    ? options.none_margin_redact
+                    : options.none_margin;
+            if (cs.best < 0 ||
+                (apply_margin &&
+                 (cs.none_p >= cs.bestp || cs.bestp - cs.none_p < margin))) {
                 cs.best = -1;
                 cs.second = -1;
                 cs.secondp = 0.0;

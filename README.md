@@ -65,14 +65,18 @@ eight paragraphs; the response merges them into one span per entity with an
 Everything is **prefill only** — there is no autoregressive loop and no
 `redacted_text` generation. A request runs through five readout stages:
 
-1. **Candidate proposal.** Character-class runs, the model's own tokenizer
-   boundaries and adjacent-token merges, plus regex exceptions for emails, URLs,
+1. **Candidate proposal.** For CJK text, cppjieba supplies word boundaries and
+   POS tags; adjacent words are merged to recover multi-word names. If the
+   dictionary is unavailable, the model tokenizer is used as a fallback. Latin
+   runs use character classes and adjacent-word merges. Regex exceptions for emails, URLs,
    phone numbers, SSN/ITIN/EIN, payment cards (Luhn), IBAN (mod-97), IPv4/IPv6,
    ticket/order numbers, API keys, case numbers and dates of birth, plus generic
    long digits and high-entropy tokens. A prefilter drops single characters,
    spans that match a caller type label (words, acronyms, or 2-6 character
-   substrings of the type ids/descriptions), and spans that cross punctuation.
-   Candidate generation does not depend on a fixed lexicon.
+   substrings of the type ids/descriptions), spans that cross punctuation, and
+   CJK spans whose first/last/interior POS is a verb, particle, preposition,
+   adverb, numeral, time word, and so on. Candidate generation uses jieba as a
+   proposal prior, not as the final classifier.
 2. **Pass A — type readout.** Every candidate becomes one branch appended to a
    shared evidence prefix (text + policy + entity types). The branch ends at the
    assistant decision position; the next-token logits are restricted to the
@@ -149,8 +153,9 @@ If every type is keep, the request returns the original text with zero decodes.
 ## Build
 
 Requires CMake 3.20+, Git, and a C++20 compiler. The official llama.cpp
-**v0.6.0** is pinned as the `third_party/llama.cpp` submodule, so no external
-checkout is needed.
+**v0.6.0** and cppjieba are pinned as submodules, so no external checkout is
+needed. cppjieba dictionaries ship in `third_party/cppjieba/dict`; set
+`ANYPPI_JIEBA_DICT` to use another dictionary directory.
 
 ```sh
 git clone --recurse-submodules https://github.com/DreamBlooms/AnyPii-Readout.git
@@ -202,6 +207,8 @@ the target with `-DCMAKE_CUDA_ARCHITECTURES=89`.
 --max-candidates N  max candidate spans (default 4000)
 --temperature T     softmax temperature (default 1.0)
 --none-margin M     minimum P(type)-P(none) margin (default 0.65)
+--none-margin-max-len N  apply the margin to spans up to N code points (default 4)
+--none-margin-redact M   margin for redact:true types (default 0.20)
 --api-key KEY       require Authorization: Bearer KEY
 --help              show this help
 ```
@@ -278,9 +285,10 @@ ANYPPI_URL=http://127.0.0.1:8080 python3 tests/test_anypii.py
   (`--max-text-cp`, `--max-candidates`); longer input returns 400.
 - The 0.8B model has limited confidence on very fine-grained custom types;
   clearer descriptions and an appropriate threshold improve results.
-- Candidate generation is tokenizer-first and the prefilter uses only structural
-  signals plus labels derived from the caller's type ids/descriptions. Tune
-  `--none-margin` and `--temperature` to trade precision against recall.
+- CJK candidate generation uses cppjieba word/POS priors; without the
+  dictionary it falls back to the model tokenizer. Labels come from the caller's
+  type ids/descriptions. Tune `--none-margin` and `--temperature` to trade
+  precision against recall.
 - `skip_keep_types` reduces unnecessary decisions. It keeps keep labels in Pass A
   to avoid false masking, so the savings are in boundary/type refinement and
   output, not in the type pass.
@@ -300,6 +308,7 @@ redaction.
 Third-party components:
 
 - [llama.cpp](https://github.com/ggml-org/llama.cpp) (MIT)
+- [cppjieba](https://github.com/yanyiwu/cppjieba) (MIT)
 - [cpp-httplib](https://github.com/yhirose/cpp-httplib) (MIT)
 - [nlohmann/json](https://github.com/nlohmann/json) (MIT)
 

@@ -15,6 +15,8 @@ struct ServerOptions {
     int max_candidates = 4000;
     double temperature = 1.0;
     double none_margin = 0.65;
+    int none_margin_max_len = 4;
+    double none_margin_redact = 0.20;
 };
 
 void run_server(Engine & engine, const ServerOptions & options);

@@ -58,10 +58,12 @@ curl http://127.0.0.1:8080/v1/anypii -H 'Content-Type: application/json' -d @exa
 
 推理仅执行 prefill，不存在自回归循环。一次请求经过五个判定阶段：
 
-1. **候选生成。** 候选来源包括按字符类划分的连续片段、模型自身 tokenizer 给出的
-   token 边界与相邻 token 合并结果，以及邮箱、URL、电话、长数字、工单/订单号、IPv4、API key 与
-   案号的正则表达式例外。预过滤会排除单字、与调用方类型标签匹配的片段（类型 id/说明中的
-   单词、缩写或 2-6 字子串），以及跨越标点的片段。候选生成不依赖固定词表。
+1. **候选生成。** 中文文本由 cppjieba 提供词边界与词性，并在相邻词之间合并以恢复
+   多词姓名；词典不可用时回退到模型 tokenizer。拉丁文本按字符类切分并合并相邻词。
+   候选还包括邮箱、URL、电话、长数字、工单/订单号、IPv4、API key、案号等正则例外。
+   预过滤会排除单字、与调用方类型标签匹配的片段（类型 id/说明中的单词、缩写或
+   2-6 字子串）、跨越标点的片段，以及首/尾/内部词性为动词、助词、介词、副词、
+   数词、时间词等的 CJK 片段。jieba 仅作为候选先验，不承担最终分类。
 2. **Pass A：类型判定。** 每个候选对应一条追加到共享 evidence 前缀（原文、策略
    与类型说明）的分支。分支结束于 assistant 判定位置；next-token logits 被限制到
    本次请求的类型代码加 `none`。对这些 logits 做 softmax，即得到类型分布；类型还必须
@@ -128,8 +130,9 @@ redacted)` 的多次出现会合并为一个 span。
 
 ## 构建
 
-需要 CMake 3.20+、Git 和 C++20 编译器。官方 llama.cpp **v0.6.0** 已作为
-`third_party/llama.cpp` 子模块固定，无需外部 checkout。
+需要 CMake 3.20+、Git 和 C++20 编译器。官方 llama.cpp **v0.6.0** 与 cppjieba
+已作为子模块固定，无需外部 checkout。cppjieba 词典位于
+`third_party/cppjieba/dict`；可用 `ANYPPI_JIEBA_DICT` 指向其他词典目录。
 
 ```sh
 git clone --recurse-submodules https://github.com/DreamBlooms/AnyPii-Readout.git
@@ -179,6 +182,8 @@ CUDA 交叉编译时可用 `-DCMAKE_CUDA_ARCHITECTURES=89` 指定目标架构。
 --max-candidates N  最大候选片段数（默认 4000）
 --temperature T     softmax 温度（默认 1.0）
 --none-margin M     最小 P(type)-P(none) 置信差（默认 0.65）
+--none-margin-max-len N  仅对不超过 N 个 code point 的片段应用置信差（默认 4）
+--none-margin-redact M   redact:true 类型的最小置信差（默认 0.20）
 --api-key KEY       要求 Authorization: Bearer KEY
 --help              显示帮助
 ```
@@ -254,8 +259,9 @@ ANYPPI_URL=http://127.0.0.1:8080 python3 tests/test_anypii.py
   `--max-candidates` 调整）；超出时返回 400。
 - 0.8B 模型在细粒度自定义类型上的置信度有限；更明确的 description 与合适的
   threshold 可改善结果。
-- 候选生成以 tokenizer 为先，预过滤只使用结构信号和调用方类型 id/说明派生的标签。
-  可通过 `--none-margin` 与 `--temperature` 调整精确率/召回率。
+- 中文候选生成使用 cppjieba 词/词性先验；词典不可用时回退到模型 tokenizer。
+  标签来自调用方类型 id/说明。可通过 `--none-margin` 与 `--temperature`
+  调整精确率/召回率。
 - `skip_keep_types` 用于减少不必要的判定。它仍在 Pass A 中保留类型标签，以避免误打码，
   因此节省的是边界与类型精修及输出，而非类型判定阶段。
 - 服务默认仅监听本地 HTTP；对外部署时应置于反向代理之后，并启用 `--api-key`。
@@ -271,6 +277,7 @@ ANYPPI_URL=http://127.0.0.1:8080 python3 tests/test_anypii.py
 第三方组件：
 
 - [llama.cpp](https://github.com/ggml-org/llama.cpp)（MIT）
+- [cppjieba](https://github.com/yanyiwu/cppjieba)（MIT）
 - [cpp-httplib](https://github.com/yhirose/cpp-httplib)（MIT）
 - [nlohmann/json](https://github.com/nlohmann/json)（MIT）
 

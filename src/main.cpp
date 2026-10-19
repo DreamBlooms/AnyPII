@@ -23,6 +23,8 @@ struct Args {
     int max_candidates = 4000;
     double temperature = 1.0;
     double none_margin = 0.65;
+    int none_margin_max_len = 4;
+    double none_margin_redact = 0.20;
 };
 
 void usage(const char * argv0) {
@@ -43,7 +45,9 @@ void usage(const char * argv0) {
         << "  --max-text-cp N     max input text length in code points (default 16000)\n"
         << "  --max-candidates N  max candidate spans (default 4000)\n"
         << "  --temperature T     softmax temperature (default 1.0)\n"
-        << "  --none-margin M     minimum P(type)-P(none) margin (default 0.0)\n"
+        << "  --none-margin M     minimum P(type)-P(none) margin (default 0.65)\n"
+        << "  --none-margin-max-len N  apply the margin to spans up to N code points (default 4)\n"
+        << "  --none-margin-redact M   margin for redact:true types (default 0.20)\n"
         << "  --api-key KEY       require Authorization: Bearer KEY\n"
         << "  --help              show this help\n";
 }
@@ -98,6 +102,10 @@ Args parse_args(int argc, char ** argv) {
             a.temperature = std::stod(need("--temperature"));
         } else if (arg == "--none-margin") {
             a.none_margin = std::stod(need("--none-margin"));
+        } else if (arg == "--none-margin-max-len") {
+            a.none_margin_max_len = std::stoi(need("--none-margin-max-len"));
+        } else if (arg == "--none-margin-redact") {
+            a.none_margin_redact = std::stod(need("--none-margin-redact"));
         } else if (arg == "--api-key") {
             a.api_key = need("--api-key");
         } else {
@@ -137,6 +145,8 @@ int main(int argc, char ** argv) {
         sopts.max_candidates = args.max_candidates;
         sopts.temperature = args.temperature;
         sopts.none_margin = args.none_margin;
+        sopts.none_margin_max_len = args.none_margin_max_len;
+        sopts.none_margin_redact = args.none_margin_redact;
         anypii::run_server(engine, sopts);
     } catch (const std::exception & e) {
         std::cerr << "error: " << e.what() << "\n";

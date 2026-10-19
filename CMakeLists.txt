@@ -53,6 +53,7 @@ add_executable(anypii
     src/main.cpp
     src/engine.cpp
     src/nist.cpp
+    src/segment.cpp
     src/sys.cpp
     src/unicode.cpp
     src/candidates.cpp
@@ -64,8 +65,11 @@ add_executable(anypii
 target_include_directories(anypii PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/cppjieba/include"
     "${LLAMA_DIR}/include"
 )
+target_compile_definitions(anypii PRIVATE
+    ANYPPI_JIEBA_DICT="${CMAKE_CURRENT_SOURCE_DIR}/third_party/cppjieba/dict")
 target_compile_options(anypii PRIVATE -Wall -Wextra -Wno-unused-parameter)
 target_link_libraries(anypii PRIVATE llama Threads::Threads)
 if(WIN32)

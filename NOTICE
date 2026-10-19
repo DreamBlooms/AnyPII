@@ -14,6 +14,7 @@ No source code from those projects is linked into AnyPII.
 Third-party components:
 
   llama.cpp     - https://github.com/ggml-org/llama.cpp (MIT)
+  cppjieba      - https://github.com/yanyiwu/cppjieba (MIT)
   cpp-httplib   - https://github.com/yhirose/cpp-httplib (MIT)
   nlohmann/json - https://github.com/nlohmann/json (MIT)
 

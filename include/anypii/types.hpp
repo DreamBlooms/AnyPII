@@ -21,6 +21,7 @@ struct Candidate {
     std::string text;
     double prior = 1.0;
     bool regex_hit = false;
+    bool pos_ok = true;
 };
 
 struct PhraseHit {

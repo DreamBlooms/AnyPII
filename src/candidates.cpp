@@ -1,6 +1,7 @@
 #include "anypii/candidates.hpp"
 
 #include "anypii/nist.hpp"
+#include "anypii/segment.hpp"
 
 #include <algorithm>
 #include <map>
@@ -77,7 +78,7 @@ std::vector<Candidate> propose_candidates(const Utf8Text & text, Engine & engine
                                           const CandidateOptions & options) {
     std::map<std::pair<int, int>, Candidate> unique;
 
-    auto add = [&](int start, int end, double prior, bool regex_hit) {
+    auto add = [&](int start, int end, double prior, bool regex_hit, bool pos_ok = true) {
         if (start < 0) start = 0;
         if (end > text.size()) end = text.size();
         if (!regex_hit) trim_span(text, start, end);
@@ -93,10 +94,12 @@ std::vector<Candidate> propose_candidates(const Utf8Text & text, Engine & engine
             c.text = text.substr(start, end);
             c.prior = prior;
             c.regex_hit = regex_hit;
+            c.pos_ok = pos_ok;
             unique.emplace(key, std::move(c));
         } else {
             it->second.prior = std::max(it->second.prior, prior);
             it->second.regex_hit = it->second.regex_hit || regex_hit;
+            it->second.pos_ok = it->second.pos_ok || pos_ok;
         }
     };
 
@@ -115,55 +118,81 @@ std::vector<Candidate> propose_candidates(const Utf8Text & text, Engine & engine
         const Run & run = runs[r];
         const int len = run.end - run.start;
         if (run.cls == CharClass::Cjk) {
-            // Tokenizer-first: the model's own vocabulary proposes word-ish
-            // boundaries, then adjacent tokens are merged. No external
-            // dictionary and no industry-specific list.
+            // CJK candidates are word-aligned. cppjieba supplies the word
+            // boundaries and POS tags; adjacent words are merged to recover
+            // multi-word names. If the dictionary is unavailable, fall back to
+            // the model tokenizer.
             const std::string run_text = text.substr(run.start, run.end);
-            const auto toks = engine.tokenize(run_text, false);
-            bool token_ok = false;
-            if (!toks.empty()) {
-                std::vector<int> tok_start;
-                std::vector<int> tok_end;
-                std::string rebuilt;
-                int cursor = run.start;
-                bool ok = true;
-                for (llama_token t : toks) {
-                    std::string piece = strip_piece_prefix(engine.token_to_piece(t));
-                    if (piece.empty()) {
-                        ok = false;
-                        break;
+            std::vector<SegmentWord> seg;
+            const bool seg_ok = segment_cjk(run_text, seg);
+            if (seg_ok) {
+                const int nw = (int) seg.size();
+                auto pos_ok = [&](int a, int b) {
+                    if (a < 0 || b < a || b >= nw) return true;
+                    if (weak_pos(seg[(size_t) a].pos) || weak_pos(seg[(size_t) b].pos)) {
+                        return false;
                     }
-                    const Utf8Text pt = decode_utf8(piece);
-                    if (text.substr(cursor, cursor + pt.size()) != piece) {
-                        ok = false;
-                        break;
+                    for (int k = a + 1; k < b; ++k) {
+                        if (weak_pos(seg[(size_t) k].pos)) return false;
                     }
-                    tok_start.push_back(cursor);
-                    cursor += pt.size();
-                    tok_end.push_back(cursor);
-                    rebuilt += piece;
+                    return true;
+                };
+                for (int a = 0; a < nw; ++a) {
+                    for (int b = a; b < nw && b < a + options.token_merge; ++b) {
+                        add(run.start + seg[(size_t) a].start,
+                            run.start + seg[(size_t) b].end,
+                            1.04, false, pos_ok(a, b));
+                    }
                 }
-                if (ok && cursor == run.end && rebuilt == run_text) {
-                    token_ok = true;
-                    const int nt = (int) toks.size();
-                    for (int a = 0; a < nt; ++a) {
-                        for (int b = a; b < nt && b < a + options.token_merge; ++b) {
-                            add(tok_start[(size_t) a], tok_end[(size_t) b], 1.03, false);
+                if (len <= options.max_span_cp) {
+                    add(run.start, run.end, 1.0, false, pos_ok(0, nw - 1));
+                }
+            } else {
+                const auto toks = engine.tokenize(run_text, false);
+                bool token_ok = false;
+                if (!toks.empty()) {
+                    std::vector<int> tok_start;
+                    std::vector<int> tok_end;
+                    std::string rebuilt;
+                    int cursor = run.start;
+                    bool ok = true;
+                    for (llama_token t : toks) {
+                        std::string piece = strip_piece_prefix(engine.token_to_piece(t));
+                        if (piece.empty()) {
+                            ok = false;
+                            break;
+                        }
+                        const Utf8Text pt = decode_utf8(piece);
+                        if (text.substr(cursor, cursor + pt.size()) != piece) {
+                            ok = false;
+                            break;
+                        }
+                        tok_start.push_back(cursor);
+                        cursor += pt.size();
+                        tok_end.push_back(cursor);
+                        rebuilt += piece;
+                    }
+                    if (ok && cursor == run.end && rebuilt == run_text) {
+                        token_ok = true;
+                        const int nt = (int) toks.size();
+                        for (int a = 0; a < nt; ++a) {
+                            for (int b = a; b < nt && b < a + options.token_merge; ++b) {
+                                add(tok_start[(size_t) a], tok_end[(size_t) b], 1.03, false);
+                            }
                         }
                     }
                 }
-            }
-            if (!token_ok) {
-                // Fallback only when token piece offsets cannot be reconstructed.
-                const int ngram = std::min(options.max_char_ngram, len);
-                const int min_len = len <= 3 ? 1 : 2;
-                for (int l = min_len; l <= ngram; ++l) {
-                    for (int s = run.start; s + l <= run.end; ++s) {
-                        add(s, s + l, 1.0, false);
+                if (!token_ok) {
+                    const int ngram = std::min(options.max_char_ngram, len);
+                    const int min_len = len <= 3 ? 1 : 2;
+                    for (int l = min_len; l <= ngram; ++l) {
+                        for (int s = run.start; s + l <= run.end; ++s) {
+                            add(s, s + l, 1.0, false);
+                        }
                     }
                 }
+                if (len <= options.max_span_cp) add(run.start, run.end, 1.0, false);
             }
-            if (len <= options.max_span_cp) add(run.start, run.end, 1.0, false);
         } else if (run.cls == CharClass::Word || run.cls == CharClass::Other) {
             if (len <= options.max_span_cp) add(run.start, run.end, 1.0, false);
             // Merge adjacent Latin words separated by a single space (Latin names).

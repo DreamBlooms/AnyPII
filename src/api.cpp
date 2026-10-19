@@ -203,6 +203,8 @@ void run_server(Engine & engine, const ServerOptions & options) {
             ropts.max_candidates = options.max_candidates;
             ropts.temperature = options.temperature;
             ropts.none_margin = options.none_margin;
+            ropts.none_margin_max_len = options.none_margin_max_len;
+            ropts.none_margin_redact = options.none_margin_redact;
             AnyPiiResult result = run_pipeline(engine, request, ropts);
             res.set_content(to_json(result).dump(), "application/json; charset=utf-8");
         } catch (const std::invalid_argument & e) {
