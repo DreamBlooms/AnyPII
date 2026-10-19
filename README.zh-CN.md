@@ -183,11 +183,12 @@ redacted)` 的多次出现会合并为一个 span。
 ## 结果缓存
 
 相同请求会直接返回缓存结果，不再执行 decode。缓存 key 包含模型名、原文、策略、
-有序类型定义、threshold、`mask_style`、`skip_keep_types`、`mode` 和
-`parrot_typed`。缓存为有界 LRU（`--result-cache-entries`、
+有序类型定义、threshold、`mask_style`、`skip_keep_types`、
+`omit_keep_spans`、`mode` 和 `parrot_typed`。缓存为有界 LRU（`--result-cache-entries`、
 `--result-cache-bytes`），只存输出，不存 KV。命中时
 `usage.result_cache.status = "hit"` 且 `decodes = 0`；命中响应中不会有
-`usage.readout`/`usage.pcd`。
+`usage.readout`/`usage.pcd`。readout/PCD 的 prefix checkpoint 与候选生成 memo
+是独立的内部分缓存；只有结果缓存会跳过全部 decode。
 
 ## 温度与置信度
 
@@ -313,6 +314,7 @@ CUDA 交叉编译时可用 `-DCMAKE_CUDA_ARCHITECTURES=89` 指定目标架构。
 | `threshold` | 可选，默认 `0.55` |
 | `mask_style` | `"token"`（`[REDACTED]`）、`"length"`（每个 code point 一个 `█`）、`"type"`（`[type]`）或 `"typed"`（`[type:index]`）；`"mask"` 是 length 的别名 |
 | `skip_keep_types` | 可选；跳过仅含保留类型的探测、精修与输出 |
+| `omit_keep_spans` | 可选；从响应中省略 `redacted:false` 的 spans（文本不变） |
 | `parrot_typed` | 可选；`parrot` 模式下用类型 id 作为 token choices，而不是 `REDACTED`（需要 `types`） |
 | `mode` | `"readout"`（默认）、`"pcd"`（实验性）或 `"parrot"`/`"复读机"`（实验性 token 级） |
 | `fallback` | 可选；为后续约束解码路径保留 |
@@ -353,6 +355,7 @@ python3 tests/test_anypii.py
 - readout 与 PCD 的 prefix-checkpoint 缓存命中；
 - parrot/复读机 模式管线、typed parrot 与 `mask_style: "type"`；
 - 相同请求结果缓存；
+- `omit_keep_spans` 输出过滤；
 - `redact` 翻转；
 - 等长遮罩与 typed 遮罩；
 - auto redact；

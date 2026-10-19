@@ -135,6 +135,12 @@ AnyPiiRequest parse_request(const std::string & body) {
         }
         req.skip_keep_types = j["skip_keep_types"].get<bool>();
     }
+    if (j.contains("omit_keep_spans")) {
+        if (!j["omit_keep_spans"].is_boolean()) {
+            throw std::invalid_argument("omit_keep_spans must be a boolean");
+        }
+        req.omit_keep_spans = j["omit_keep_spans"].get<bool>();
+    }
     if (j.contains("parrot_typed")) {
         if (!j["parrot_typed"].is_boolean()) {
             throw std::invalid_argument("parrot_typed must be a boolean");
@@ -296,6 +302,7 @@ std::string result_cache_key(const Engine & engine, const AnyPiiRequest & reques
     key["mask_style"] = request.mask_style;
     key["mode"] = request.mode;
     key["skip_keep_types"] = request.skip_keep_types;
+    key["omit_keep_spans"] = request.omit_keep_spans;
     key["parrot_typed"] = request.parrot_typed;
     key["fallback"] = request.fallback;
     key["types"] = json::array();

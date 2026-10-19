@@ -211,10 +211,13 @@ environment variables.
 
 Identical requests return a cached response without running any decodes. The
 key includes the model name, text, policy, ordered type definitions, threshold,
-`mask_style`, `skip_keep_types`, `mode`, and `parrot_typed`. The cache is a
+`mask_style`, `skip_keep_types`, `omit_keep_spans`, `mode`, and
+`parrot_typed`. The cache is a
 bounded LRU (`--result-cache-entries`, `--result-cache-bytes`) of output only;
 it stores no KV state. Hits report `usage.result_cache.status = "hit"` with
-`decodes = 0`; `usage.readout`/`usage.pcd` are absent on a hit.
+`decodes = 0`; `usage.readout`/`usage.pcd` are absent on a hit. Readout/PCD
+prefix checkpoints and the candidate-generation memo are separate internal
+caches; only the result cache skips all decoding.
 
 ## Temperature and confidence
 
@@ -353,6 +356,7 @@ Request:
 | `threshold` | optional, default `0.55` |
 | `mask_style` | `"token"` (`[REDACTED]`), `"length"` (`█` per code point), `"type"` (`[type]`), or `"typed"` (`[type:index]`); `"mask"` is an alias for length |
 | `skip_keep_types` | optional; skip keep-only detection/refinement/output |
+| `omit_keep_spans` | optional; omit `redacted:false` spans from the response (text is unchanged) |
 | `parrot_typed` | optional; in `parrot` mode use type ids as token choices instead of `REDACTED` (requires `types`) |
 | `mode` | `"readout"` (default), `"pcd"` (experimental), or `"parrot"` (experimental token-level) |
 | `fallback` | optional; reserved for a future constrained-decoding path |
@@ -394,6 +398,7 @@ The test script starts and stops its own server on a random port. It covers:
 - readout and PCD prefix-checkpoint cache hits;
 - parrot mode plumbing, typed parrot, and `mask_style: "type"`;
 - identical-request result cache;
+- `omit_keep_spans` output filtering;
 - `redact` flip;
 - equal-length and typed masking;
 - auto redaction;

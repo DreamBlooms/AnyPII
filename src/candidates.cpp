@@ -4,10 +4,13 @@
 #include "anypii/segment.hpp"
 
 #include <algorithm>
+#include <list>
 #include <map>
+#include <mutex>
 #include <regex>
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <utility>
 
 namespace anypii {
@@ -72,10 +75,40 @@ void trim_span(const Utf8Text & text, int & start, int & end) {
     }
 }
 
+struct CandidateCacheEntry {
+    std::vector<Candidate> candidates;
+    std::list<std::string>::iterator recency;
+};
+
+struct CandidateCache {
+    std::mutex mutex;
+    std::list<std::string> order;
+    std::unordered_map<std::string, CandidateCacheEntry> entries;
+};
+
+CandidateCache & candidate_cache() {
+    static CandidateCache cache;
+    return cache;
+}
+
 } // namespace
 
 std::vector<Candidate> propose_candidates(const Utf8Text & text, Engine & engine,
                                           const CandidateOptions & options) {
+    const std::string cache_key =
+        engine.model_name() + "|" + std::to_string(options.max_span_cp) + "|" +
+        std::to_string(options.max_char_ngram) + "|" +
+        std::to_string(options.token_merge) + "|" + text.bytes;
+    {
+        CandidateCache & cache = candidate_cache();
+        std::lock_guard<std::mutex> lock(cache.mutex);
+        auto it = cache.entries.find(cache_key);
+        if (it != cache.entries.end()) {
+            cache.order.splice(cache.order.begin(), cache.order, it->second.recency);
+            return it->second.candidates;
+        }
+    }
+
     std::map<std::pair<int, int>, Candidate> unique;
 
     auto add = [&](int start, int end, double prior, bool regex_hit, bool pos_ok = true) {
@@ -262,6 +295,23 @@ std::vector<Candidate> propose_candidates(const Utf8Text & text, Engine & engine
         if (a.start != b.start) return a.start < b.start;
         return a.end < b.end;
     });
+    {
+        CandidateCache & cache = candidate_cache();
+        std::lock_guard<std::mutex> lock(cache.mutex);
+        if (auto it = cache.entries.find(cache_key); it != cache.entries.end()) {
+            cache.order.splice(cache.order.begin(), cache.order, it->second.recency);
+            it->second.candidates = out;
+        } else {
+            constexpr std::size_t max_entries = 8;
+            while (!cache.order.empty() && cache.entries.size() + 1 > max_entries) {
+                cache.entries.erase(cache.order.back());
+                cache.order.pop_back();
+            }
+            cache.order.push_front(cache_key);
+            cache.entries.emplace(cache_key,
+                                  CandidateCacheEntry{out, cache.order.begin()});
+        }
+    }
     return out;
 }
 

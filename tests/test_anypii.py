@@ -284,6 +284,17 @@ def test_parrot_typed(c):
     print("ok parrot typed")
 
 
+def test_omit_keep_spans(c):
+    req = load("contact.json")
+    req["omit_keep_spans"] = True
+    r = c.post(req)
+    assert r["redacted_text"] == CONTACT_TEXT, r["redacted_text"]
+    assert r["spans"], r["spans"]
+    assert all(span["redacted"] for span in r["spans"]), r["spans"]
+    assert all(span["text"] != "TCK-2024-0912" for span in r["spans"])
+    print("ok omit keep spans")
+
+
 def test_auto_redact(c):
     req = load("contact.json")
     req["types"]["phone"].pop("redact", None)  # auto
@@ -413,6 +424,7 @@ def main():
         test_redact_flip(c)
         test_length_mask(c)
         test_type_mask(c)
+        test_omit_keep_spans(c)
         test_auto_redact(c)
         test_parrot_typed(c)
         test_typed_mask(c)

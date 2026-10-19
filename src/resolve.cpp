@@ -961,6 +961,11 @@ AnyPiiResult run_pcd_pipeline(Engine & engine, const AnyPiiRequest & request,
         }
     }
 
+    if (request.omit_keep_spans) {
+        final_hits.erase(std::remove_if(final_hits.begin(), final_hits.end(),
+                                        [](const PhraseHit & h) { return !h.redacted; }),
+                         final_hits.end());
+    }
     emit_grouped(out, text, final_hits, request);
     out.generated_tokens = 0;
     return out;
@@ -1766,6 +1771,12 @@ finalize:
             h.redact_score = p_redact;
             h.redacted = p_redact >= request.threshold;
         }
+    }
+
+    if (request.omit_keep_spans) {
+        final_hits.erase(std::remove_if(final_hits.begin(), final_hits.end(),
+                                        [](const PhraseHit & h) { return !h.redacted; }),
+                         final_hits.end());
     }
 
     // Group repeated occurrences of the same entity (type + text + redacted
