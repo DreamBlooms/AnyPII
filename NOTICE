@@ -1,5 +1,5 @@
 AnyPII
-Copyright 2026 AnyPII contributors.
+Copyright 2026 DreamBlooms / 心想花開.
 
 AnyPII is an independent C++ implementation of policy-driven PII redaction.
 The prompt layout and logit-readout architecture are inspired by the System One
