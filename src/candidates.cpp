@@ -198,11 +198,16 @@ std::vector<Candidate> propose_candidates(const Utf8Text & text, Engine & engine
             // Merge adjacent Latin words separated by a single space (Latin names).
             if (r + 1 < runs.size()) {
                 const Run & next = runs[r + 1];
+                auto starts_upper = [&](int at) {
+                    const char32_t cp = text.cps[(size_t) at];
+                    return cp >= U'A' && cp <= U'Z';
+                };
                 if ((run.cls == CharClass::Word || next.cls == CharClass::Word) &&
-                    next.start == run.end + 1 && text.cps[(size_t) run.end] == ' ') {
+                    next.start == run.end + 1 && text.cps[(size_t) run.end] == ' ' &&
+                    starts_upper(run.start) && starts_upper(next.start)) {
                     const int merged_len = next.end - run.start;
                     if (merged_len <= options.max_span_cp) {
-                        add(run.start, next.end, 1.0, false);
+                        add(run.start, next.end, 1.05, false);
                     }
                 }
             }

@@ -234,7 +234,7 @@ double boundary_factor(const std::string & span) {
     if (is_punct_cp(t.cps.front()) || is_space_cp(t.cps.front())) f *= 0.60;
     if (is_punct_cp(t.cps.back()) || is_space_cp(t.cps.back())) f *= 0.60;
     for (size_t i = 1; i + 1 < t.cps.size(); ++i) {
-        if (is_punct_cp(t.cps[i]) || is_space_cp(t.cps[i])) f *= 0.70;
+        if (is_punct_cp(t.cps[i])) f *= 0.70;
     }
     return std::max(0.2, f);
 }
@@ -297,10 +297,29 @@ AnyPiiResult run_pipeline(Engine & engine, const AnyPiiRequest & request,
     candidates.reserve(proposed.size());
     const bool skip_keep = request.skip_keep_types;
     const auto type_label_ngrams = build_type_label_ngrams(request.types);
+    std::vector<std::pair<int, int>> regex_spans;
+    for (const auto & c : proposed) {
+        if (c.regex_hit) regex_spans.push_back({c.start, c.end});
+    }
 
     for (const auto & c : proposed) {
         if (!c.regex_hit) {
             if (c.end - c.start <= 1) continue;
+            // A short word immediately before/after a structured value is a
+            // label (server, address, email, ticket, "should"...), not the PII.
+            bool adjacent_regex = false;
+            if (c.end - c.start <= 6) {
+                for (const auto & [rs, re] : regex_spans) {
+                    const int gap_before = rs - c.end;
+                    const int gap_after = c.start - re;
+                    if ((gap_before >= 0 && gap_before <= 2) ||
+                        (gap_after >= 0 && gap_after <= 2)) {
+                        adjacent_regex = true;
+                        break;
+                    }
+                }
+            }
+            if (adjacent_regex) continue;
             if (!c.pos_ok) continue;
             if (is_type_label(decode_utf8(c.text), request.types, type_label_ngrams)) continue;
             // Do not start in the middle of a caller type-label bigram
@@ -714,6 +733,36 @@ AnyPiiResult run_pipeline(Engine & engine, const AnyPiiRequest & request,
     }
 
     if (selected.empty()) goto finalize;
+
+    // Completeness prior: a short selected span can be a word inside a longer
+    // name (Alice / Alice Johnson, Acme / Acme Corp, 赵敏 / 责任护士赵敏).
+    // Extend only when the longer candidate is close in type probability.
+    for (auto & s : selected) {
+        if (candidates[(size_t) s.cand].regex_hit) continue;
+        int best = s.cand;
+        int best_len = candidates[(size_t) s.cand].end - candidates[(size_t) s.cand].start;
+        const double base_p = scores[(size_t) s.cand].bestp;
+        for (int m = 0; m < (int) candidates.size(); ++m) {
+            if (m == s.cand) continue;
+            if (scores[(size_t) m].best < 0) continue;
+            if (!(candidates[(size_t) m].start <= candidates[(size_t) s.cand].start &&
+                  candidates[(size_t) m].end >= candidates[(size_t) s.cand].end)) {
+                continue;
+            }
+            const int len = candidates[(size_t) m].end - candidates[(size_t) m].start;
+            if (len <= best_len) continue;
+            if (scores[(size_t) m].bestp < base_p - 0.15) continue;
+            if (boundary_factor(candidates[(size_t) m].text) < 0.60) continue;
+            best = m;
+            best_len = len;
+        }
+        if (best != s.cand) {
+            s.cand = best;
+            s.type = scores[(size_t) best].best;
+            s.weight = scores[(size_t) best].bestp;
+            s.text = candidates[(size_t) best].text;
+        }
+    }
 
     // ---------- Pairwise type refinement ----------
     struct TypeMeta {

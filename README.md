@@ -73,10 +73,12 @@ Everything is **prefill only** — there is no autoregressive loop and no
    ticket/order numbers, API keys, case numbers and dates of birth, plus generic
    long digits and high-entropy tokens. A prefilter drops single characters,
    spans that match a caller type label (words, acronyms, or 2-6 character
-   substrings of the type ids/descriptions), spans that cross punctuation, and
-   CJK spans whose first/last/interior POS is a verb, particle, preposition,
-   adverb, numeral, time word, and so on. Candidate generation uses jieba as a
-   proposal prior, not as the final classifier.
+   substrings of the type ids/descriptions), spans that cross punctuation,
+   short words immediately adjacent to a structured regex value, and CJK spans
+   whose first/last/interior POS is a verb, particle, preposition, adverb,
+   numeral, time word, and so on. Latin multi-word names are merged only when
+   both words are capitalized (Alice Johnson, Acme Corp). Candidate generation
+   uses jieba as a proposal prior, not as the final classifier.
 2. **Pass A — type readout.** Every candidate becomes one branch appended to a
    shared evidence prefix (text + policy + entity types). The branch ends at the
    assistant decision position; the next-token logits are restricted to the
