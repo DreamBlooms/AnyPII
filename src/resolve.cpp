@@ -405,6 +405,125 @@ std::vector<CandScore> readout_type_scores(
     return scores;
 }
 
+struct ParrotToken {
+    int start = 0;
+    int end = 0;
+};
+
+std::vector<ParrotToken> parrot_tokens(Engine & engine, const std::string & text) {
+    const auto ids = engine.tokenize(text, false);
+    std::vector<ParrotToken> out;
+    std::string rebuilt;
+    int cp = 0;
+    for (llama_token id : ids) {
+        const std::string piece = engine.token_to_piece(id);
+        if (piece.empty()) {
+            throw std::invalid_argument("parrot mode requires a tokenizer-reconstructible text");
+        }
+        const Utf8Text pt = decode_utf8(piece);
+        out.push_back({cp, cp + pt.size()});
+        cp += pt.size();
+        rebuilt += piece;
+    }
+    if (rebuilt != text) {
+        throw std::invalid_argument("parrot mode requires a tokenizer-reconstructible text");
+    }
+    return out;
+}
+
+AnyPiiResult run_parrot_pipeline(Engine & engine, const AnyPiiRequest & request,
+                                 const ResolveOptions & options) {
+    AnyPiiResult out;
+    out.model = engine.model_name();
+    out.backend = engine.backend_name();
+
+    const Utf8Text text = decode_utf8(request.text);
+    if (text.size() == 0) {
+        out.redacted_text = request.text;
+        return out;
+    }
+    if (text.size() > options.max_text_cp) {
+        throw std::invalid_argument("state.text is too long (max " +
+                                    std::to_string(options.max_text_cp) + " code points)");
+    }
+
+    const auto tokens = parrot_tokens(engine, request.text);
+    constexpr int max_parrot_tokens = 256;
+    if ((int) tokens.size() > max_parrot_tokens) {
+        throw std::invalid_argument("parrot mode supports up to " +
+                                    std::to_string(max_parrot_tokens) +
+                                    " tokens; use readout/pcd for longer text");
+    }
+
+    PcdDecoder local_decoder(engine);
+    PcdDecoder & decoder = options.pcd ? *options.pcd : local_decoder;
+    std::vector<double> redact_p(tokens.size(), 0.0);
+
+    const size_t chunk = 31;
+    for (size_t base = 0; base < tokens.size(); base += chunk) {
+        std::vector<PcdField> fields;
+        for (size_t i = base; i < tokens.size() && i < base + chunk; ++i) {
+            PcdField f;
+            f.name = "p" + std::to_string(i);
+            f.description =
+                "Token " + std::to_string(i) + ": \"" +
+                clean_line(text.substr(tokens[i].start, tokens[i].end)) +
+                "\". Context: \"" +
+                clean_line(context_of(text, tokens[i].start, tokens[i].end, 16)) +
+                "\". Should this token be copied or replaced with REDACTED?";
+            f.choices = {"copy", "REDACTED"};
+            fields.push_back(std::move(f));
+        }
+        const std::string policy = request.policy.empty() ? "none" : request.policy;
+        const std::string system =
+            "You are a token-level PII redaction engine (parrot/repeater). For "
+            "every field choose copy or REDACTED. Copy preserves the original "
+            "token; REDACTED obscures it under the Policy. Policy:\n" + policy + "\n" +
+            pcd_system_prompt(fields);
+        PcdResult decoded = decoder.decode(pcd_chat_prefix(system, request.text), fields);
+        add_pcd_metrics(out, decoded.metrics, (int) fields.size());
+        for (size_t j = 0; j < fields.size(); ++j) {
+            double p = 0.0;
+            const auto & probs = decoded.fields[j].probabilities;
+            for (size_t k = 0; k < fields[j].choices.size() && k < probs.size(); ++k) {
+                if (fields[j].choices[k] == "REDACTED") {
+                    p = probs[k];
+                    break;
+                }
+            }
+            redact_p[base + j] = p;
+        }
+    }
+
+    std::vector<PhraseHit> hits;
+    for (size_t i = 0; i < tokens.size();) {
+        if (redact_p[i] < request.threshold) {
+            ++i;
+            continue;
+        }
+        size_t j = i;
+        double sum = 0.0;
+        while (j < tokens.size() && redact_p[j] >= request.threshold) {
+            sum += redact_p[j];
+            ++j;
+        }
+        PhraseHit h;
+        h.start = tokens[i].start;
+        h.end = tokens[j - 1].end;
+        h.text = text.substr(h.start, h.end);
+        h.type = "redacted";
+        h.score = sum / (double) (j - i);
+        h.redact_score = h.score;
+        h.redacted = true;
+        hits.push_back(std::move(h));
+        i = j;
+    }
+
+    emit_grouped(out, text, hits, request);
+    out.generated_tokens = 0;
+    return out;
+}
+
 AnyPiiResult run_pcd_pipeline(Engine & engine, const AnyPiiRequest & request,
                               const ResolveOptions & options) {
     AnyPiiResult out;
@@ -815,6 +934,9 @@ AnyPiiResult run_pcd_pipeline(Engine & engine, const AnyPiiRequest & request,
 
 AnyPiiResult run_pipeline(Engine & engine, const AnyPiiRequest & request,
                           const ResolveOptions & options) {
+    if (request.mode == "parrot") {
+        return run_parrot_pipeline(engine, request, options);
+    }
     if (request.mode == "pcd") {
         return run_pcd_pipeline(engine, request, options);
     }

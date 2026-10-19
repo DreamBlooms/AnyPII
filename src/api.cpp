@@ -67,30 +67,37 @@ AnyPiiRequest parse_request(const std::string & body) {
     if (j.contains("mode")) {
         if (!j["mode"].is_string()) throw std::invalid_argument("mode must be a string");
         req.mode = j["mode"].get<std::string>();
-        if (req.mode != "readout" && req.mode != "pcd") {
-            throw std::invalid_argument("mode must be \"readout\" or \"pcd\"");
+        if (req.mode == "复读机") req.mode = "parrot";
+        if (req.mode != "readout" && req.mode != "pcd" && req.mode != "parrot") {
+            throw std::invalid_argument("mode must be \"readout\", \"pcd\", or \"parrot\"");
         }
     }
-    if (!j.contains("types") || !j["types"].is_object()) {
+    const bool type_free = req.mode == "parrot";
+    if (!type_free && (!j.contains("types") || !j["types"].is_object())) {
         throw std::invalid_argument("types is required and must be an object");
     }
-    for (auto it = j["types"].begin(); it != j["types"].end(); ++it) {
-        const std::string id = it.key();
-        const json & v = it.value();
-        if (!v.is_object()) {
-            throw std::invalid_argument("types." + id + " must be an object");
+    if (j.contains("types")) {
+        if (!j["types"].is_object()) {
+            throw std::invalid_argument("types must be an object");
         }
-        TypeDef t;
-        t.id = id;
-        if (v.contains("description")) {
-            if (!v["description"].is_string()) {
-                throw std::invalid_argument("types." + id +
-                                            ".description must be a string");
+        for (auto it = j["types"].begin(); it != j["types"].end(); ++it) {
+            const std::string id = it.key();
+            const json & v = it.value();
+            if (!v.is_object()) {
+                throw std::invalid_argument("types." + id + " must be an object");
             }
-            t.description = v["description"].get<std::string>();
+            TypeDef t;
+            t.id = id;
+            if (v.contains("description")) {
+                if (!v["description"].is_string()) {
+                    throw std::invalid_argument("types." + id +
+                                                ".description must be a string");
+                }
+                t.description = v["description"].get<std::string>();
+            }
+            if (v.contains("redact")) t.redact = parse_redact(v["redact"], id);
+            req.types.push_back(std::move(t));
         }
-        if (v.contains("redact")) t.redact = parse_redact(v["redact"], id);
-        req.types.push_back(std::move(t));
     }
 
     if (j.contains("threshold")) {

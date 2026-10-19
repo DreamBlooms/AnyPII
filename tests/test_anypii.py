@@ -195,6 +195,22 @@ def test_pcd_mode(c):
     print("ok PCD mode")
 
 
+def test_parrot_mode(c):
+    req = {
+        "state": {"text": "电话 13800138000。", "policy": "打码手机号。"},
+        "mode": "parrot",
+    }
+    r = c.post(req)
+    assert "pcd" in r["usage"], r["usage"]
+    assert r["usage"]["pcd"]["forward_passes"] > 0, r["usage"]
+    assert r["usage"]["generated_tokens"] == 0
+
+    req["mode"] = "复读机"
+    r2 = c.post(req)
+    assert "pcd" in r2["usage"], r2["usage"]
+    print("ok parrot mode")
+
+
 def test_redact_flip(c):
     req = load("medical.json")
     req["types"]["patient_name"]["redact"] = False
@@ -347,6 +363,7 @@ def main():
         test_nist_fast_path(c)
         test_readout_cache(c)
         test_pcd_mode(c)
+        test_parrot_mode(c)
         test_redact_flip(c)
         test_length_mask(c)
         test_auto_redact(c)

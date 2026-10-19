@@ -174,6 +174,16 @@ prefix checkpoint（`--pcd-cache-entries`、`--pcd-cache-bytes`）。其类型�
 `--readout-cache-entries`、`--readout-cache-bytes` 暴露有界前缀 checkpoint LRU，
 状态在 `usage.readout` 中。
 
+### Parrot / 复读机模式
+
+`mode: "parrot"`（别名 `"复读机"`）是不分类的 token 级 PCD 原型：每个 token
+一个 field，choices 为 `copy` / `REDACTED`，连续 REDACTED token 会合并，返回
+type `"redacted"`。`types` 可省略且会被忽略；文本必须可由 tokenizer 还原，
+且不超过 256 个 token。
+
+当前 0.8B 模型在该模式下会明显过度打码，因此仅作为对比/基准保留，不推荐生产
+使用；请使用 `readout` 或 `pcd`。
+
 ## 构建
 
 需要 CMake 3.20+、Git 和 C++20 编译器。官方 llama.cpp **v0.6.0** 与 cppjieba
@@ -252,7 +262,7 @@ CUDA 交叉编译时可用 `-DCMAKE_CUDA_ARCHITECTURES=89` 指定目标架构。
 | `threshold` | 可选，默认 `0.55` |
 | `mask_style` | `"token"`（`[REDACTED]`）、`"length"`（每个 code point 一个 `█`）或 `"typed"`（`[type:index]`）；`"mask"` 是 length 的别名 |
 | `skip_keep_types` | 可选；跳过仅含保留类型的探测、精修与输出 |
-| `mode` | `"readout"`（默认）或 `"pcd"`（实验性并行约束解码） |
+| `mode` | `"readout"`（默认）、`"pcd"`（实验性）或 `"parrot"`/`"复读机"`（实验性 token 级） |
 | `fallback` | 可选；为后续约束解码路径保留 |
 
 响应：
@@ -289,6 +299,7 @@ python3 tests/test_anypii.py
 - 医疗与联系信息的精确输出；
 - NIST 正则快速路径（SSN、ITIN、EIN、支付卡、IBAN、IPv6、出生日期），零 decode；
 - readout 与 PCD 的 prefix-checkpoint 缓存命中；
+- parrot/复读机 模式管线；
 - `redact` 翻转；
 - 等长遮罩与 typed 遮罩；
 - auto redact；

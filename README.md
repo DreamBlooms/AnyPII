@@ -205,6 +205,17 @@ passes, cache status, checkpoint bytes, and phase timings. Readout requests expo
 checkpoint LRU (`--readout-cache-entries`, `--readout-cache-bytes`) through
 `usage.readout`.
 
+### Parrot / 复读机 mode
+
+`mode: "parrot"` (alias `"复读机"`) is a type-free token-level PCD prototype.
+It creates one field per token with choices `copy` / `REDACTED`, merges
+consecutive redacted tokens, and returns type `"redacted"`. `types` is optional
+and ignored; the text must be tokenizer-reconstructible and at most 256 tokens.
+
+The current 0.8B model over-redacts heavily in this mode, so it is kept for
+comparison and benchmarking, not recommended for production. Use `readout` or
+`pcd` instead.
+
 ## Build
 
 Requires CMake 3.20+, Git, and a C++20 compiler. The official llama.cpp
@@ -286,7 +297,7 @@ Request:
 | `threshold` | optional, default `0.55` |
 | `mask_style` | `"token"` (`[REDACTED]`), `"length"` (`█` per code point), or `"typed"` (`[type:index]`); `"mask"` is an alias for length |
 | `skip_keep_types` | optional; skip keep-only detection/refinement/output |
-| `mode` | `"readout"` (default) or `"pcd"` (experimental Parallel Constrained Decoding) |
+| `mode` | `"readout"` (default), `"pcd"` (experimental), or `"parrot"`/`"复读机"` (experimental token-level) |
 | `fallback` | optional; reserved for a future constrained-decoding path |
 
 Response:
@@ -324,6 +335,7 @@ The test script starts and stops its own server on a random port. It covers:
 - exact medical and contact outputs;
 - NIST regex fast path (SSN, ITIN, EIN, payment card, IBAN, IPv6, date of birth) with zero decodes;
 - readout and PCD prefix-checkpoint cache hits;
+- parrot/复读机 mode plumbing;
 - `redact` flip;
 - equal-length and typed masking;
 - auto redaction;
