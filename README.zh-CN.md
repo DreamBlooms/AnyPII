@@ -149,8 +149,8 @@ redacted)` 的多次出现会合并为一个 span。
 
 ## 温度与置信度
 
-`--temperature` 会在 softmax 前缩放受限 logits。它影响 readout 路径，以及 PCD
-使用的 readout 先验；PCD 自身的 choice 打分仍使用原始 logits。建议起点：
+`--temperature` 会在 softmax 前缩放受限 logits。它影响 readout 路径、PCD 的
+choice 打分，以及 PCD 使用的 readout 先验。建议起点：
 
 - `0.85–0.95`：更高的精确率，减少边缘 keep span，但可能漏掉歧义姓名或 ID。
 - `1.0`：默认值。
@@ -178,11 +178,16 @@ prefix checkpoint（`--pcd-cache-entries`、`--pcd-cache-bytes`）。其类型�
 
 `mode: "parrot"`（别名 `"复读机"`）是不分类的 token 级 PCD 原型：每个 token
 一个 field，choices 为 `copy` / `REDACTED`，连续 REDACTED token 会合并，返回
-type `"redacted"`。`types` 可省略且会被忽略；文本必须可由 tokenizer 还原，
-且不超过 256 个 token。
+type `"redacted"`。`types` 可省略；未启用 `parrot_typed` 时会被忽略。文本必须
+可由 tokenizer 还原，且不超过 256 个 token。
 
-当前 0.8B 模型在该模式下会明显过度打码，因此仅作为对比/基准保留，不推荐生产
-使用；请使用 `readout` 或 `pcd`。
+设置 `parrot_typed: true` 后，每个 token 的 choices 变为 `copy` 加请求中的
+类型 id；连续同类型 token 会合并为带类型的 span。`mask_style: "type"` 输出
+`[type]`，`"typed"` 输出 `[type:index]`。
+
+当前 0.8B 会明显过度打码；2B 在温度 0.7–1.3 下要么过度打码、要么全部 copy，
+typed 2B 倾向于全部 copy。因此该模式仅作为对比/基准保留，不推荐生产使用；
+请使用 `readout` 或 `pcd`。
 
 ## 构建
 
@@ -260,8 +265,9 @@ CUDA 交叉编译时可用 `-DCMAKE_CUDA_ARCHITECTURES=89` 指定目标架构。
 | `types.*.description` | 类型说明 |
 | `types.*.redact` | `true`/`false` 强制；省略或 `"auto"` 由 readout 判定 |
 | `threshold` | 可选，默认 `0.55` |
-| `mask_style` | `"token"`（`[REDACTED]`）、`"length"`（每个 code point 一个 `█`）或 `"typed"`（`[type:index]`）；`"mask"` 是 length 的别名 |
+| `mask_style` | `"token"`（`[REDACTED]`）、`"length"`（每个 code point 一个 `█`）、`"type"`（`[type]`）或 `"typed"`（`[type:index]`）；`"mask"` 是 length 的别名 |
 | `skip_keep_types` | 可选；跳过仅含保留类型的探测、精修与输出 |
+| `parrot_typed` | 可选；`parrot` 模式下用类型 id 作为 token choices，而不是 `REDACTED`（需要 `types`） |
 | `mode` | `"readout"`（默认）、`"pcd"`（实验性）或 `"parrot"`/`"复读机"`（实验性 token 级） |
 | `fallback` | 可选；为后续约束解码路径保留 |
 
@@ -299,7 +305,7 @@ python3 tests/test_anypii.py
 - 医疗与联系信息的精确输出；
 - NIST 正则快速路径（SSN、ITIN、EIN、支付卡、IBAN、IPv6、出生日期），零 decode；
 - readout 与 PCD 的 prefix-checkpoint 缓存命中；
-- parrot/复读机 模式管线；
+- parrot/复读机 模式管线、typed parrot 与 `mask_style: "type"`；
 - `redact` 翻转；
 - 等长遮罩与 typed 遮罩；
 - auto redact；

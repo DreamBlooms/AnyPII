@@ -41,6 +41,7 @@ struct PcdOptions {
     std::size_t cache_entries = 4;
     std::size_t cache_bytes = 256ull * 1024 * 1024;
     int max_tree_levels = 24;
+    double temperature = 1.0;
 };
 
 // System prompt listing every field, its description and allowed values.

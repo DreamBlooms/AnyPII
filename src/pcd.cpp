@@ -359,6 +359,7 @@ PcdResult PcdDecoder::decode(const std::string & prefix_text,
     std::vector<EngineBatchToken> batch;
     std::vector<std::pair<int, int>> pending;
 
+    const double inv_temp = 1.0 / std::max(0.01, options_.temperature);
     auto flush = [&](bool score) {
         if (batch.empty()) return;
         engine_.decode_batch(batch);
@@ -368,7 +369,9 @@ PcdResult PcdDecoder::decode(const std::string & prefix_text,
             for (const auto & [field, index] : pending) {
                 const float * row = engine_.logits_ith(index);
                 states[(std::size_t) field]->advance(
-                    [row](int32_t token) { return (double) row[token]; });
+                    [row, inv_temp](int32_t token) {
+                        return (double) row[token] * inv_temp;
+                    });
             }
         }
         batch.clear();

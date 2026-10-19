@@ -58,6 +58,7 @@ struct AnyPiiRequest {
     std::string mode = "readout";
     bool fallback = true;
     bool skip_keep_types = false;
+    bool parrot_typed = false;
 };
 
 struct PcdPhaseTimings {

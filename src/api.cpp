@@ -115,9 +115,10 @@ AnyPiiRequest parse_request(const std::string & body) {
         }
         req.mask_style = j["mask_style"].get<std::string>();
         if (req.mask_style != "token" && req.mask_style != "length" &&
-            req.mask_style != "mask" && req.mask_style != "typed") {
+            req.mask_style != "mask" && req.mask_style != "typed" &&
+            req.mask_style != "type") {
             throw std::invalid_argument(
-                "mask_style must be \"token\", \"length\", \"mask\", or \"typed\"");
+                "mask_style must be \"token\", \"length\", \"mask\", \"typed\", or \"type\"");
         }
     }
     if (j.contains("fallback")) {
@@ -131,6 +132,15 @@ AnyPiiRequest parse_request(const std::string & body) {
             throw std::invalid_argument("skip_keep_types must be a boolean");
         }
         req.skip_keep_types = j["skip_keep_types"].get<bool>();
+    }
+    if (j.contains("parrot_typed")) {
+        if (!j["parrot_typed"].is_boolean()) {
+            throw std::invalid_argument("parrot_typed must be a boolean");
+        }
+        req.parrot_typed = j["parrot_typed"].get<bool>();
+    }
+    if (req.mode == "parrot" && req.parrot_typed && req.types.empty()) {
+        throw std::invalid_argument("parrot_typed requires a non-empty types object");
     }
     return req;
 }
@@ -197,6 +207,7 @@ void run_server(Engine & engine, const ServerOptions & options) {
     PcdOptions pcd_options;
     pcd_options.cache_entries = (size_t) std::max(0, options.pcd_cache_entries);
     pcd_options.cache_bytes = options.pcd_cache_bytes;
+    pcd_options.temperature = options.temperature;
     PcdDecoder pcd(engine, pcd_options);
 
     server.Get("/health", [&](const httplib::Request &, httplib::Response & res) {

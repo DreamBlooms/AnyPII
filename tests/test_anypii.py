@@ -239,6 +239,31 @@ def test_length_mask(c):
     print("ok length mask")
 
 
+def test_type_mask(c):
+    req = load("contact.json")
+    req["mask_style"] = "type"
+    r = c.post(req)
+    expected = "联系人手机 [phone]，邮箱 [email]；工单 TCK-2024-0912 已受理。"
+    assert r["redacted_text"] == expected, r["redacted_text"]
+    print("ok type mask")
+
+
+def test_parrot_typed(c):
+    req = {
+        "state": {"text": "陈思远来访。", "policy": "打码人名。"},
+        "types": {"person": {"description": "person name", "redact": True}},
+        "mode": "parrot",
+        "parrot_typed": True,
+        "mask_style": "type",
+    }
+    r = c.post(req)
+    assert "pcd" in r["usage"], r["usage"]
+    assert r["usage"]["generated_tokens"] == 0
+    for span in r["spans"]:
+        assert span["type"] == "person", span
+    print("ok parrot typed")
+
+
 def test_auto_redact(c):
     req = load("contact.json")
     req["types"]["phone"].pop("redact", None)  # auto
@@ -366,7 +391,9 @@ def main():
         test_parrot_mode(c)
         test_redact_flip(c)
         test_length_mask(c)
+        test_type_mask(c)
         test_auto_redact(c)
+        test_parrot_typed(c)
         test_typed_mask(c)
         test_merge_occurrences(c)
         test_long_text(c)

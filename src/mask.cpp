@@ -7,7 +7,8 @@ namespace anypii {
 std::string apply_mask(const Utf8Text & text, const std::vector<PhraseHit> & spans,
                        const std::string & style,
                        const std::vector<int> * group_index) {
-    if (style != "token" && style != "length" && style != "mask" && style != "typed") {
+    if (style != "token" && style != "length" && style != "mask" &&
+        style != "typed" && style != "type") {
         throw std::invalid_argument("unsupported mask_style: " + style);
     }
     if (style == "typed" && (group_index == nullptr ||
@@ -29,6 +30,8 @@ std::string apply_mask(const Utf8Text & text, const std::vector<PhraseHit> & spa
         if (span.redacted) {
             if (style == "token") {
                 out += "[REDACTED]";
+            } else if (style == "type") {
+                out += "[" + span.type + "]";
             } else if (style == "typed") {
                 out += "[" + span.type + ":" +
                        std::to_string((*group_index)[si]) + "]";

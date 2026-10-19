@@ -173,8 +173,8 @@ If every type is keep, the request returns the original text with zero decodes.
 ## Temperature and confidence
 
 `--temperature` scales the restricted logits before softmax. It affects the
-readout path and the readout prior used by PCD; PCD's own choice scoring uses
-raw logits. Practical starting points:
+readout path, PCD choice scoring, and the readout prior used by PCD. Practical
+starting points:
 
 - `0.85–0.95`: higher precision, fewer borderline keep spans, but can miss
   ambiguous names or IDs.
@@ -210,11 +210,17 @@ checkpoint LRU (`--readout-cache-entries`, `--readout-cache-bytes`) through
 `mode: "parrot"` (alias `"复读机"`) is a type-free token-level PCD prototype.
 It creates one field per token with choices `copy` / `REDACTED`, merges
 consecutive redacted tokens, and returns type `"redacted"`. `types` is optional
-and ignored; the text must be tokenizer-reconstructible and at most 256 tokens.
+and ignored unless `parrot_typed` is true; the text must be
+tokenizer-reconstructible and at most 256 tokens.
 
-The current 0.8B model over-redacts heavily in this mode, so it is kept for
-comparison and benchmarking, not recommended for production. Use `readout` or
-`pcd` instead.
+With `parrot_typed: true`, each token's choices become `copy` plus the request's
+type ids; consecutive tokens of the same type merge into a typed span. Use
+`mask_style: "type"` to render `[type]`, or `"typed"` for `[type:index]`.
+
+Current 0.8B results over-redact heavily; 2B at temperatures 0.7–1.3 either
+over-redacts or copies everything, and typed 2B tends to copy all tokens. This
+mode is kept for comparison and benchmarking, not recommended for production.
+Use `readout` or `pcd` instead.
 
 ## Build
 
@@ -295,8 +301,9 @@ Request:
 | `types.*.description` | what the type means |
 | `types.*.redact` | `true`/`false` forced; omitted or `"auto"` uses readout |
 | `threshold` | optional, default `0.55` |
-| `mask_style` | `"token"` (`[REDACTED]`), `"length"` (`█` per code point), or `"typed"` (`[type:index]`); `"mask"` is an alias for length |
+| `mask_style` | `"token"` (`[REDACTED]`), `"length"` (`█` per code point), `"type"` (`[type]`), or `"typed"` (`[type:index]`); `"mask"` is an alias for length |
 | `skip_keep_types` | optional; skip keep-only detection/refinement/output |
+| `parrot_typed` | optional; in `parrot` mode use type ids as token choices instead of `REDACTED` (requires `types`) |
 | `mode` | `"readout"` (default), `"pcd"` (experimental), or `"parrot"`/`"复读机"` (experimental token-level) |
 | `fallback` | optional; reserved for a future constrained-decoding path |
 
@@ -335,7 +342,7 @@ The test script starts and stops its own server on a random port. It covers:
 - exact medical and contact outputs;
 - NIST regex fast path (SSN, ITIN, EIN, payment card, IBAN, IPv6, date of birth) with zero decodes;
 - readout and PCD prefix-checkpoint cache hits;
-- parrot/复读机 mode plumbing;
+- parrot/复读机 mode plumbing, typed parrot, and `mask_style: "type"`;
 - `redact` flip;
 - equal-length and typed masking;
 - auto redaction;

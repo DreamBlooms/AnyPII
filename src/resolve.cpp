@@ -455,9 +455,14 @@ AnyPiiResult run_parrot_pipeline(Engine & engine, const AnyPiiRequest & request,
                                     " tokens; use readout/pcd for longer text");
     }
 
+    const bool typed = request.parrot_typed && !request.types.empty();
+    TypeTable table;
+    if (typed) table = build_type_table(request.types);
+
     PcdDecoder local_decoder(engine);
     PcdDecoder & decoder = options.pcd ? *options.pcd : local_decoder;
-    std::vector<double> redact_p(tokens.size(), 0.0);
+    std::vector<std::string> token_label(tokens.size());
+    std::vector<double> token_p(tokens.size(), 0.0);
 
     const size_t chunk = 31;
     for (size_t base = 0; base < tokens.size(); base += chunk) {
@@ -465,53 +470,82 @@ AnyPiiResult run_parrot_pipeline(Engine & engine, const AnyPiiRequest & request,
         for (size_t i = base; i < tokens.size() && i < base + chunk; ++i) {
             PcdField f;
             f.name = "p" + std::to_string(i);
-            f.description =
-                "Token " + std::to_string(i) + ": \"" +
-                clean_line(text.substr(tokens[i].start, tokens[i].end)) +
-                "\". Context: \"" +
-                clean_line(context_of(text, tokens[i].start, tokens[i].end, 16)) +
-                "\". Should this token be copied or replaced with REDACTED?";
-            f.choices = {"copy", "REDACTED"};
+            const std::string token_text =
+                clean_line(text.substr(tokens[i].start, tokens[i].end));
+            const std::string context =
+                clean_line(context_of(text, tokens[i].start, tokens[i].end, 16));
+            if (typed) {
+                f.description = "Token " + std::to_string(i) + ": \"" + token_text +
+                                "\". Context: \"" + context +
+                                "\". Choose copy for an ordinary/non-PII token, or "
+                                "the exact type id for a PII token.";
+                f.choices.push_back("copy");
+                for (const auto & t : table.types) f.choices.push_back(t.id);
+            } else {
+                f.description = "Token " + std::to_string(i) + ": \"" + token_text +
+                                "\". Context: \"" + context +
+                                "\". Copy is the default; choose REDACTED only when "
+                                "this exact token is part of a PII mention covered by "
+                                "the Policy.";
+                f.choices = {"copy", "REDACTED"};
+            }
             fields.push_back(std::move(f));
         }
         const std::string policy = request.policy.empty() ? "none" : request.policy;
-        const std::string system =
-            "You are a token-level PII redaction engine (parrot/repeater). For "
-            "every field choose copy or REDACTED. Copy preserves the original "
-            "token; REDACTED obscures it under the Policy. Policy:\n" + policy + "\n" +
-            pcd_system_prompt(fields);
+        std::string system;
+        if (typed) {
+            system =
+                "You are a token-level PII type classifier (parrot/repeater). For "
+                "every field choose copy for ordinary/non-PII tokens, or the exact "
+                "type id for a PII token. Copy is the safe default for punctuation, "
+                "verbs, and neighboring context. Policy:\n" + policy + "\n" +
+                pcd_type_legend(table) + "\n" + pcd_system_prompt(fields);
+        } else {
+            system =
+                "You are a token-level PII redaction engine (parrot/repeater). For "
+                "every field choose copy or REDACTED. Copy is the safe default for "
+                "ordinary words, punctuation, verbs, and neighboring context. Choose "
+                "REDACTED only when this exact token is part of a PII mention covered "
+                "by the Policy. Policy:\n" + policy + "\n" + pcd_system_prompt(fields);
+        }
         PcdResult decoded = decoder.decode(pcd_chat_prefix(system, request.text), fields);
         add_pcd_metrics(out, decoded.metrics, (int) fields.size());
         for (size_t j = 0; j < fields.size(); ++j) {
-            double p = 0.0;
-            const auto & probs = decoded.fields[j].probabilities;
-            for (size_t k = 0; k < fields[j].choices.size() && k < probs.size(); ++k) {
-                if (fields[j].choices[k] == "REDACTED") {
-                    p = probs[k];
-                    break;
+            const auto & res = decoded.fields[j];
+            if (res.value.empty() || res.probability < request.threshold) continue;
+            if (typed) {
+                if (res.value == "copy") continue;
+                bool valid = false;
+                for (const auto & t : table.types) {
+                    if (t.id == res.value) { valid = true; break; }
                 }
+                if (!valid) continue;
+                token_label[base + j] = res.value;
+                token_p[base + j] = res.probability;
+            } else if (res.value == "REDACTED") {
+                token_label[base + j] = "redacted";
+                token_p[base + j] = res.probability;
             }
-            redact_p[base + j] = p;
         }
     }
 
     std::vector<PhraseHit> hits;
     for (size_t i = 0; i < tokens.size();) {
-        if (redact_p[i] < request.threshold) {
+        if (token_label[i].empty()) {
             ++i;
             continue;
         }
         size_t j = i;
         double sum = 0.0;
-        while (j < tokens.size() && redact_p[j] >= request.threshold) {
-            sum += redact_p[j];
+        while (j < tokens.size() && token_label[j] == token_label[i]) {
+            sum += token_p[j];
             ++j;
         }
         PhraseHit h;
         h.start = tokens[i].start;
         h.end = tokens[j - 1].end;
         h.text = text.substr(h.start, h.end);
-        h.type = "redacted";
+        h.type = token_label[i];
         h.score = sum / (double) (j - i);
         h.redact_score = h.score;
         h.redacted = true;
