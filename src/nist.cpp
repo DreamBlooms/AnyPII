@@ -36,6 +36,8 @@ const std::vector<CompiledPattern> & compiled_patterns() {
          std::regex(R"(9[0-9]{2}[- ][7-9][0-9][- ][0-9]{4})", std::regex::optimize)},
         {{R"([0-9]{2}-[0-9]{7})", 1.25, PiiFormat::Ein},
          std::regex(R"([0-9]{2}-[0-9]{7})", std::regex::optimize)},
+        {{R"(\b[1-9][0-9]{16}[0-9Xx]\b)", 1.35, PiiFormat::ChinaId},
+         std::regex(R"(\b[1-9][0-9]{16}[0-9Xx]\b)", std::regex::optimize)},
         {{R"((?:[0-9][ -]?){12,18}[0-9])", 1.30, PiiFormat::CreditCard},
          std::regex(R"((?:[0-9][ -]?){12,18}[0-9])", std::regex::optimize)},
         {{R"([A-Z]{2}[0-9]{2}(?: ?[A-Z0-9]){11,30})", 1.30, PiiFormat::Iban},
@@ -48,10 +50,29 @@ const std::vector<CompiledPattern> & compiled_patterns() {
          std::regex(R"(\b[A-Z][0-9]{8}\b)", std::regex::optimize)},
         {{R"((?:AKIA|ASIA)[0-9A-Z]{16})", 1.35, PiiFormat::AwsKey},
          std::regex(R"((?:AKIA|ASIA)[0-9A-Z]{16})", std::regex::optimize)},
+        {{R"(\b[A-Z]{1,2}[0-9]{6}(?:\([0-9A]\)|[0-9A]))", 1.30, PiiFormat::HkId},
+         std::regex(R"(\b[A-Z]{1,2}[0-9]{6}(?:\([0-9A]\)|[0-9A]))",
+                    std::regex::optimize)},
+        {{R"([1-9][0-9]{6}\([0-9]\))", 1.25, PiiFormat::MacauId},
+         std::regex(R"([1-9][0-9]{6}\([0-9]\))", std::regex::optimize)},
+        {{R"(\b[A-Z][12][0-9]{8}\b)", 1.30, PiiFormat::TaiwanId},
+         std::regex(R"(\b[A-Z][12][0-9]{8}\b)", std::regex::optimize)},
         {{R"([0-9]{10})", 1.25, PiiFormat::Npi},
          std::regex(R"([0-9]{10})", std::regex::optimize)},
         {{R"((?:\+?86[- ]?)?1[3-9][0-9]{9})", 1.30, PiiFormat::Phone},
          std::regex(R"((?:\+?86[- ]?)?1[3-9][0-9]{9})", std::regex::optimize)},
+        {{R"(\b(?:\+?86[- ]?)?(?:0[0-9]{2,3}[- ]?)?[0-9]{7,8}\b)", 1.25, PiiFormat::Phone},
+         std::regex(R"(\b(?:\+?86[- ]?)?(?:0[0-9]{2,3}[- ]?)?[0-9]{7,8}\b)",
+                    std::regex::optimize)},
+        {{R"(\b(?:\+?852[- ]?)?[2-9][0-9]{7}\b)", 1.25, PiiFormat::Phone},
+         std::regex(R"(\b(?:\+?852[- ]?)?[2-9][0-9]{7}\b)", std::regex::optimize)},
+        {{R"(\b(?:\+?853[- ]?)?[68][0-9]{7}\b)", 1.25, PiiFormat::Phone},
+         std::regex(R"(\b(?:\+?853[- ]?)?[68][0-9]{7}\b)", std::regex::optimize)},
+        {{R"(\b(?:\+?886[- ]?)?9[0-9]{8}\b)", 1.25, PiiFormat::Phone},
+         std::regex(R"(\b(?:\+?886[- ]?)?9[0-9]{8}\b)", std::regex::optimize)},
+        {{R"(\b(?:\+?886[- ]?)?0?[2-8][- ]?[0-9]{7,8}\b)", 1.25, PiiFormat::Phone},
+         std::regex(R"(\b(?:\+?886[- ]?)?0?[2-8][- ]?[0-9]{7,8}\b)",
+                    std::regex::optimize)},
         {{R"(\b(?:\+?1[-. ]?)?(?:\([0-9]{3}\)|[0-9]{3})[-. ]?[0-9]{3}[-. ]?[0-9]{4}\b)",
           1.30, PiiFormat::Phone},
          std::regex(
@@ -295,6 +316,83 @@ bool valid_vin(const std::string & s) {
     return s[8] == expected;
 }
 
+bool valid_china_id(const std::string & s) {
+    if (s.size() != 18) return false;
+    for (int i = 0; i < 17; ++i) {
+        if (!std::isdigit((unsigned char) s[(size_t) i])) return false;
+    }
+    static const int weights[17] = {7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2};
+    static const char check[] = "10X98765432";
+    int sum = 0;
+    for (int i = 0; i < 17; ++i) sum += (s[(size_t) i] - '0') * weights[i];
+    if (s[17] != check[sum % 11] && std::toupper((unsigned char) s[17]) != check[sum % 11]) {
+        return false;
+    }
+    const int year = std::stoi(s.substr(6, 4));
+    const int month = std::stoi(s.substr(10, 2));
+    const int day = std::stoi(s.substr(12, 2));
+    if (year < 1900 || year > 2100 || month < 1 || month > 12 || day < 1) return false;
+    static const int days[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    int limit = days[month - 1];
+    if (month == 2 && ((year % 4 == 0 && year % 100 != 0) || year % 400 == 0)) limit = 29;
+    return day <= limit;
+}
+
+bool valid_hkid(const std::string & s) {
+    std::string compact;
+    for (char c : s) {
+        if (c != '(' && c != ')' && c != ' ' && c != '-') compact.push_back(c);
+    }
+    if (compact.size() != 8 && compact.size() != 9) return false;
+    const char check = (char) std::toupper((unsigned char) compact.back());
+    if (!std::isalnum((unsigned char) check)) return false;
+    compact.pop_back();
+    std::vector<int> values;
+    size_t i = 0;
+    while (i < compact.size() && std::isalpha((unsigned char) compact[i])) {
+        values.push_back(std::toupper((unsigned char) compact[i]) - 'A' + 1);
+        ++i;
+    }
+    if (values.empty() || values.size() > 2) return false;
+    for (; i < compact.size(); ++i) {
+        if (!std::isdigit((unsigned char) compact[i])) return false;
+        values.push_back(compact[i] - '0');
+    }
+    if (values.size() != 7 && values.size() != 8) return false;
+    static const int weights[8] = {9, 8, 7, 6, 5, 4, 3, 2};
+    int sum = 0;
+    for (size_t k = 0; k < values.size(); ++k) sum += values[k] * weights[k];
+    int expected = 11 - sum % 11;
+    char expected_char = expected == 10 ? 'A' : (expected == 11 ? '0' : (char) ('0' + expected));
+    return check == expected_char;
+}
+
+bool valid_macau_id(const std::string & s) {
+    if (s.size() != 10) return false;
+    for (int i = 0; i < 7; ++i) {
+        if (!std::isdigit((unsigned char) s[(size_t) i])) return false;
+    }
+    return s[7] == '(' && std::isdigit((unsigned char) s[8]) && s[9] == ')';
+}
+
+bool valid_taiwan_id(const std::string & s) {
+    if (s.size() != 10) return false;
+    static const int codes[26] = {
+        10, 11, 12, 13, 14, 15, 16, 17, 34, 18, 19, 20, 21,
+        22, 35, 23, 24, 25, 26, 27, 28, 29, 32, 30, 31, 33};
+    const char letter = (char) std::toupper((unsigned char) s[0]);
+    if (letter < 'A' || letter > 'Z') return false;
+    if (s[1] != '1' && s[1] != '2') return false;
+    for (int i = 2; i < 10; ++i) {
+        if (!std::isdigit((unsigned char) s[(size_t) i])) return false;
+    }
+    const int code = codes[letter - 'A'];
+    int sum = code / 10 + (code % 10) * 9;
+    static const int weights[9] = {8, 7, 6, 5, 4, 3, 2, 1, 1};
+    for (int i = 0; i < 9; ++i) sum += (s[1 + i] - '0') * weights[i];
+    return sum % 10 == 0;
+}
+
 bool format_valid(PiiFormat fmt, const std::string & s) {
     switch (fmt) {
         case PiiFormat::Ssn:
@@ -317,6 +415,14 @@ bool format_valid(PiiFormat fmt, const std::string & s) {
             return valid_dea(s);
         case PiiFormat::Vin:
             return valid_vin(s);
+        case PiiFormat::ChinaId:
+            return valid_china_id(s);
+        case PiiFormat::HkId:
+            return valid_hkid(s);
+        case PiiFormat::MacauId:
+            return valid_macau_id(s);
+        case PiiFormat::TaiwanId:
+            return valid_taiwan_id(s);
         case PiiFormat::Ip:
             return s.find(':') != std::string::npos ? valid_ipv6(s) : valid_ipv4(s);
         default:
@@ -426,6 +532,18 @@ bool type_matches_format(PiiFormat format, const TypeDef & type) {
             return has("dea") || has("drug enforcement administration");
         case PiiFormat::Vin:
             return has("vin") || has("vehicle identification number");
+        case PiiFormat::ChinaId:
+            return has("china id") || has("chinese id") || has("cn id") ||
+                   has("resident identity card") || has("mainland id");
+        case PiiFormat::HkId:
+            return has("hkid") || has("hk id") || has("hong kong id") ||
+                   has("hong kong identity card");
+        case PiiFormat::MacauId:
+            return has("macau id") || has("macao id") ||
+                   has("macau identity card");
+        case PiiFormat::TaiwanId:
+            return has("twid") || has("tw id") || has("taiwan id") ||
+                   has("taiwan identity card") || has("roc id");
         case PiiFormat::Passport:
             return has("passport") || has("passport number");
         case PiiFormat::AwsKey:

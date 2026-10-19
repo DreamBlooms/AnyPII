@@ -248,6 +248,47 @@ def test_parrot_mode(c):
     print("ok parrot mode")
 
 
+def test_regional_ids(c):
+    req = {
+        "state": {
+            "text": (
+                "身份证 11010519491231002X；香港身份证 A123456(3)；"
+                "澳门身份证 1234567(8)；台湾身份证 A123456789。"
+                "电话 +86 13800138000，010-12345678，+852 61234567，"
+                "+853 66123456，+886 912345678，+886 2-12345678，"
+                "12345678，1234567，0755-12345678。"
+            ),
+            "policy": "打码身份证和电话号码。",
+        },
+        "types": {
+            "cn_id": {"description": "mainland China resident identity card", "redact": True},
+            "hkid": {"description": "Hong Kong identity card", "redact": True},
+            "macau_id": {"description": "Macau identity card", "redact": True},
+            "twid": {"description": "Taiwan identity card", "redact": True},
+            "phone": {"description": "phone number", "redact": True},
+        },
+    }
+    r = c.post(req)
+    assert r["usage"]["decodes"] == 0, r["usage"]
+    expected = (
+        "身份证 [REDACTED]；香港身份证 [REDACTED]；"
+        "澳门身份证 [REDACTED]；台湾身份证 [REDACTED]。"
+        "电话 [REDACTED]，[REDACTED]，[REDACTED]，[REDACTED]，[REDACTED]，"
+        "[REDACTED]，[REDACTED]，[REDACTED]，[REDACTED]。"
+    )
+    assert r["redacted_text"] == expected, r["redacted_text"]
+    got = {(s["type"], s["text"]) for s in r["spans"]}
+    assert ("cn_id", "11010519491231002X") in got
+    assert ("hkid", "A123456(3)") in got
+    assert ("macau_id", "1234567(8)") in got
+    assert ("twid", "A123456789") in got
+    for phone in ["+86 13800138000", "010-12345678", "+852 61234567",
+                  "+853 66123456", "+886 912345678", "+886 2-12345678",
+                  "12345678", "1234567", "0755-12345678"]:
+        assert ("phone", phone) in got, got
+    print("ok regional IDs")
+
+
 def test_redact_flip(c):
     req = load("medical.json")
     req["types"]["patient_name"]["redact"] = False
@@ -434,6 +475,7 @@ def main():
         test_medical(c)
         test_contact(c)
         test_nist_fast_path(c)
+        test_regional_ids(c)
         test_readout_cache(c)
         test_result_cache(c)
         test_pcd_mode(c)
