@@ -89,8 +89,9 @@ Everything is **prefill only** — there is no autoregressive loop and no
    dictionary is unavailable, the model tokenizer is used as a fallback. Latin
    runs use character classes and adjacent-word merges. Regex exceptions for emails, URLs,
    phone numbers, SSN/ITIN/EIN, payment cards (Luhn), IBAN (mod-97), IPv4/IPv6,
-   NPI/MBI/DEA/VIN, ticket/order numbers, API keys, case numbers and dates of
-   birth, plus generic long digits and high-entropy tokens. A prefilter drops single characters,
+   NPI/MBI/DEA/VIN, passport numbers, AWS access keys, ticket/order numbers,
+   API keys, case numbers and dates of birth, plus generic long digits and
+   high-entropy tokens. A prefilter drops single characters,
    spans that match a caller type label (words, acronyms, or 2-6 character
    substrings of the type ids/descriptions), spans that cross punctuation,
    short words immediately adjacent to a structured regex value, and CJK spans
@@ -158,7 +159,7 @@ The model is not called when the answer is already determined by the request:
 
 | path | condition | model calls |
 | --- | --- | --- |
-| format | regex hit whose NIST format name matches exactly one type id/description (email, phone, SSN, ITIN, EIN, payment card, IBAN, IP, URL, API key, ticket, case number, DOB, NPI, MBI, DEA, VIN) | 0 |
+| format | regex hit whose NIST format name matches exactly one type id/description (email, phone, SSN, ITIN, EIN, payment card, IBAN, IP, URL, API key, ticket, case number, DOB, NPI, MBI, DEA, VIN, passport, AWS access key) | 0 |
 | length | digit candidate whose length appears in exactly one type description (`18位身份证号`, `16-19位银行卡号`) | 0 |
 | high confidence | Pass A margin and probability clear the skip threshold | 0 for type refinement |
 | description prior | a length or 2+ char description overlap determines the type | 0 for type refinement |
@@ -219,6 +220,14 @@ it stores no KV state. Hits report `usage.result_cache.status = "hit"` with
 prefix checkpoints and the candidate-generation memo are separate internal
 caches; only the result cache skips all decoding.
 
+## Readout layout
+
+`--compact-branches` shortens the per-candidate type-branch prompt. It is an
+A/B option, off by default. In current tests it reduced medical from ~3.7–4.0s
+to ~3.3s and medical-long from ~12.8–14.4s to ~9.8s, but lost the legal person
+span in one run. Keep the standard layout for production unless you have
+verified your own type set.
+
 ## Temperature and confidence
 
 `--temperature` scales the restricted logits before softmax. It affects the
@@ -250,7 +259,7 @@ readout type probabilities as a confidence gate and prior. With realistic names
 it matches readout on the medical/legal examples; placeholder names can still
 over-extend some label mentions. It is intended for repeated identical schemas
 and benchmarking. Responses in this mode include `usage.pcd` with forward
-passes, cache status, checkpoint bytes, and phase timings. Readout requests expose a bounded prefix
+passes, cache status, checkpoint bytes, prior-cache hits, and phase timings. Readout requests expose a bounded prefix
 checkpoint LRU (`--readout-cache-entries`, `--readout-cache-bytes`) through
 `usage.readout`.
 
@@ -338,6 +347,7 @@ the target with `-DCMAKE_CUDA_ARCHITECTURES=89`.
 --weak-pos-override LIST  replace the weak boundary set (use none to clear)
 --result-cache-entries N  cached identical responses (default 64)
 --result-cache-bytes BYTES  result cache budget (default 64 MiB)
+--compact-branches  shorter readout type-branch prompts (A/B)
 --api-key KEY       require Authorization: Bearer KEY
 --help              show this help
 ```
@@ -394,10 +404,10 @@ python3 tests/test_anypii.py
 The test script starts and stops its own server on a random port. It covers:
 
 - exact medical and contact outputs;
-- NIST regex fast path (SSN, ITIN, EIN, payment card, IBAN, IPv6, date of birth, NPI, MBI, DEA, VIN) with zero decodes;
+- NIST regex fast path (SSN, ITIN, EIN, payment card, IBAN, IPv6, date of birth, NPI, MBI, DEA, VIN, passport, AWS access key) with zero decodes;
 - readout and PCD prefix-checkpoint cache hits;
 - parrot mode plumbing, typed parrot, and `mask_style: "type"`;
-- identical-request result cache;
+- identical-request result cache and PCD prior cache;
 - `omit_keep_spans` output filtering;
 - `redact` flip;
 - equal-length and typed masking;
@@ -448,6 +458,10 @@ Third-party components:
 - [cppjieba](https://github.com/yanyiwu/cppjieba) (MIT)
 - [cpp-httplib](https://github.com/yhirose/cpp-httplib) (MIT)
 - [nlohmann/json](https://github.com/nlohmann/json) (MIT)
+
+PII format patterns were cross-checked against
+[trackingplan/pii-regex-library](https://github.com/trackingplan/pii-regex-library)
+(MIT) and the PII Crawler regex guide.
 
 The default model is Qwen3.5-0.8B; model weights are separate artifacts with
 their own terms.

@@ -18,6 +18,12 @@ Third-party components:
   cpp-httplib   - https://github.com/yhirose/cpp-httplib (MIT)
   nlohmann/json - https://github.com/nlohmann/json (MIT)
 
+PII format patterns were cross-checked against:
+  trackingplan/pii-regex-library
+    - https://github.com/trackingplan/pii-regex-library (MIT)
+  PII Crawler regex guide
+    - https://www.piicrawler.com/blog/regular-expressions-used-in-pii-scanning/
+
 The default model is Qwen3.5-0.8B, developed by the Qwen team at Alibaba Cloud.
 Model weights are separate artifacts with their own terms and are not
 distributed with this repository. Reference names do not imply endorsement by

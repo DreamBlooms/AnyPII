@@ -194,6 +194,8 @@ json to_json(const AnyPiiResult & result) {
             {"elapsed_ms", result.pcd_metrics.elapsed_ms},
             {"cache_status", result.pcd_metrics.cache_status},
             {"checkpoint_bytes", result.pcd_metrics.checkpoint_bytes},
+            {"prior_cache_hits", result.pcd_metrics.prior_cache_hits},
+            {"prior_cache_entries", result.pcd_metrics.prior_cache_entries},
             {"phases", {
                 {"tokenize_ms", result.pcd_metrics.phases.tokenize_ms},
                 {"restore_or_prefill_ms", result.pcd_metrics.phases.restore_or_prefill_ms},
@@ -385,6 +387,7 @@ void run_server(Engine & engine, const ServerOptions & options) {
             ropts.none_margin = options.none_margin;
             ropts.none_margin_max_len = options.none_margin_max_len;
             ropts.none_margin_redact = options.none_margin_redact;
+            ropts.compact_branches = options.compact_branches;
             ropts.pcd = &pcd;
             AnyPiiResult result = run_pipeline(engine, request, ropts);
             result.result_cache_status = "miss";

@@ -292,7 +292,8 @@ std::string local_context(const Utf8Text & text, const Candidate & c, int radius
 
 BranchSet build_type_branches(Engine & engine, const TypeTable & table,
                               const AnyPiiRequest & request, const Utf8Text & text,
-                              const std::vector<Candidate> & candidates) {
+                              const std::vector<Candidate> & candidates,
+                              bool compact) {
     if (table.types.size() + 1 > 26) {
         throw std::invalid_argument("at most 25 types are supported in one request");
     }
@@ -309,9 +310,14 @@ BranchSet build_type_branches(Engine & engine, const TypeTable & table,
 
         std::string criterion = "Mention: \"" + sanitize_line(c.text) + "\"\n";
         criterion += "Context: \"" + ctx + "\"\n";
-        criterion += "Which entity type best describes this exact mention? Choose the "
-                     "complete mention only; do not include titles, roles, category cues, "
-                     "or neighboring words. If none applies, choose the none option.";
+        if (compact) {
+            criterion += "Which type code best describes this mention? Choose none if "
+                         "it is not an entity.";
+        } else {
+            criterion += "Which entity type best describes this exact mention? Choose the "
+                         "complete mention only; do not include titles, roles, category cues, "
+                         "or neighboring words. If none applies, choose the none option.";
+        }
 
         std::string options;
         for (size_t t = 0; t < table.types.size(); ++t) {

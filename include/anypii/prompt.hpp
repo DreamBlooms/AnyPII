@@ -77,7 +77,8 @@ PromptSegments build_redact_pass(Engine & engine, const TypeTable & table,
 
 BranchSet build_type_branches(Engine & engine, const TypeTable & table,
                               const AnyPiiRequest & request, const Utf8Text & text,
-                              const std::vector<Candidate> & candidates);
+                              const std::vector<Candidate> & candidates,
+                              bool compact = false);
 
 BranchSet build_boundary_branches(Engine & engine, const TypeTable & table,
                                   const AnyPiiRequest & request,

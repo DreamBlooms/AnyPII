@@ -4,10 +4,13 @@
 #include <cstdlib>
 #include <functional>
 #include <iostream>
+#include <list>
 #include <map>
+#include <mutex>
 #include <set>
 #include <stdexcept>
 #include <tuple>
+#include <unordered_map>
 #include <unordered_set>
 #include <string>
 #include <regex>
@@ -345,6 +348,26 @@ void emit_grouped(AnyPiiResult & out, const Utf8Text & text,
 
 } // namespace
 
+namespace {
+
+struct PriorCacheEntry {
+    CandScore score;
+    std::list<uint64_t>::iterator recency;
+};
+
+struct PriorCache {
+    std::mutex mutex;
+    std::list<uint64_t> order;
+    std::unordered_map<uint64_t, PriorCacheEntry> entries;
+};
+
+PriorCache & prior_cache() {
+    static PriorCache cache;
+    return cache;
+}
+
+} // namespace
+
 std::vector<CandScore> readout_type_scores(
         Engine & engine, const TypeTable & table, const AnyPiiRequest & request,
         const Utf8Text & text, const std::vector<Candidate> & candidates,
@@ -352,20 +375,64 @@ std::vector<CandScore> readout_type_scores(
     std::vector<CandScore> scores(candidates.size());
     if (candidates.empty()) return scores;
     const int type_count = (int) table.types.size();
-    BranchSet set = build_type_branches(engine, table, request, text, candidates);
+
+    std::string base = "prior-v1|" + engine.model_name() + "|" +
+                       std::to_string(options.temperature) + "|" +
+                       std::to_string(options.none_margin) + "|" +
+                       std::to_string(options.none_margin_max_len) + "|" +
+                       std::to_string(options.none_margin_redact) + "|" +
+                       std::to_string((int) options.compact_branches) + "|" +
+                       std::to_string(options.max_branches_per_decode) + "|" +
+                       request.policy + "|" + text.bytes + "|";
+    for (const auto & type : table.types) {
+        base += type.id + ":" + type.description + ":" +
+                std::to_string((int) type.redact) + "|";
+    }
+    for (const auto & candidate : candidates) {
+        base += candidate.text + "|" + std::to_string(candidate.start) + "|" +
+                std::to_string(candidate.end) + "|";
+    }
+
+    std::vector<int> miss_indices;
+    std::vector<Candidate> miss_candidates;
+    {
+        PriorCache & cache = prior_cache();
+        std::lock_guard<std::mutex> lock(cache.mutex);
+        for (size_t i = 0; i < candidates.size(); ++i) {
+            const std::string key_text = base + candidates[i].text + "|" +
+                                         std::to_string(candidates[i].start) + "|" +
+                                         std::to_string(candidates[i].end);
+            const uint64_t key = (uint64_t) std::hash<std::string>{}(key_text);
+            auto it = cache.entries.find(key);
+            if (it != cache.entries.end()) {
+                cache.order.splice(cache.order.begin(), cache.order, it->second.recency);
+                scores[i] = it->second.score;
+                ++out.pcd_metrics.prior_cache_hits;
+            } else {
+                miss_indices.push_back((int) i);
+                miss_candidates.push_back(candidates[i]);
+            }
+        }
+        out.pcd_metrics.prior_cache_entries = (int) cache.entries.size();
+    }
+    if (miss_candidates.empty()) return scores;
+
+    BranchSet set = build_type_branches(engine, table, request, text, miss_candidates,
+                                        options.compact_branches);
     const auto probs = engine.decode_branches(set.prefix, set.branches,
                                               options.max_branches_per_decode,
                                               options.temperature);
     account_branches(out, set.branches.size(), options.max_branches_per_decode);
-    for (size_t i = 0; i < candidates.size() && i < probs.size(); ++i) {
-        std::vector<double> p = probs[i];
+    for (size_t j = 0; j < miss_candidates.size() && j < probs.size(); ++j) {
+        std::vector<double> p = probs[j];
         if ((int) p.size() <= type_count) continue;
-        const Utf8Text span_text = decode_utf8(candidates[i].text);
+        const Utf8Text span_text = decode_utf8(miss_candidates[j].text);
         double norm = 0.0;
         for (int t = 0; t < type_count; ++t) {
             p[(size_t) t] *= lexical_type_bonus(span_text, table.types[(size_t) t]);
-            p[(size_t) t] *= length_type_bonus(candidates[i].end - candidates[i].start,
-                                               table.types[(size_t) t]);
+            p[(size_t) t] *= length_type_bonus(
+                miss_candidates[j].end - miss_candidates[j].start,
+                table.types[(size_t) t]);
             norm += p[(size_t) t];
         }
         norm += p[(size_t) type_count];
@@ -387,7 +454,7 @@ std::vector<CandScore> readout_type_scores(
             }
         }
         cs.none_p = p[(size_t) type_count];
-        const int cand_len = candidates[i].end - candidates[i].start;
+        const int cand_len = miss_candidates[j].end - miss_candidates[j].start;
         const bool apply_margin = cand_len <= options.none_margin_max_len;
         const double margin =
             (cs.best >= 0 && table.types[(size_t) cs.best].redact == RedactMode::Redact)
@@ -400,7 +467,26 @@ std::vector<CandScore> readout_type_scores(
             cs.secondp = 0.0;
             cs.bestp = cs.none_p;
         }
-        scores[i] = std::move(cs);
+        const int original = miss_indices[j];
+        scores[(size_t) original] = cs;
+        const std::string key_text = base + miss_candidates[j].text + "|" +
+                                     std::to_string(miss_candidates[j].start) + "|" +
+                                     std::to_string(miss_candidates[j].end);
+        const uint64_t key = (uint64_t) std::hash<std::string>{}(key_text);
+        PriorCache & cache = prior_cache();
+        std::lock_guard<std::mutex> lock(cache.mutex);
+        if (auto old = cache.entries.find(key); old != cache.entries.end()) {
+            cache.order.erase(old->second.recency);
+            cache.entries.erase(old);
+        }
+        constexpr std::size_t max_entries = 2048;
+        while (!cache.order.empty() && cache.entries.size() + 1 > max_entries) {
+            cache.entries.erase(cache.order.back());
+            cache.order.pop_back();
+        }
+        cache.order.push_front(key);
+        cache.entries.emplace(key, PriorCacheEntry{cs, cache.order.begin()});
+        out.pcd_metrics.prior_cache_entries = (int) cache.entries.size();
     }
     return scores;
 }
@@ -1202,7 +1288,8 @@ AnyPiiResult run_pipeline(Engine & engine, const AnyPiiRequest & request,
             }
         }
 
-        BranchSet set = build_type_branches(engine, table, request, text, pass_a);
+        BranchSet set = build_type_branches(engine, table, request, text, pass_a,
+                                            options.compact_branches);
         const auto probs = engine.decode_branches(set.prefix, set.branches,
                                                   options.max_branches_per_decode,
                                                   options.temperature);

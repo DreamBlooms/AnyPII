@@ -36,6 +36,7 @@ struct Args {
     std::string weak_pos_override;
     int result_cache_entries = 64;
     size_t result_cache_bytes = 64ull * 1024 * 1024;
+    bool compact_branches = false;
 };
 
 std::vector<std::string> split_tags(const std::string & text) {
@@ -86,6 +87,7 @@ void usage(const char * argv0) {
         << "  --weak-pos-override LIST  replace the weak boundary set (use none to clear)\n"
         << "  --result-cache-entries N  cached identical responses (default 64)\n"
         << "  --result-cache-bytes BYTES  result cache budget (default 64 MiB)\n"
+        << "  --compact-branches  shorter readout type-branch prompts (A/B)\n"
         << "  --api-key KEY       require Authorization: Bearer KEY\n"
         << "  --help              show this help\n";
 }
@@ -160,6 +162,8 @@ Args parse_args(int argc, char ** argv) {
             a.result_cache_entries = std::stoi(need("--result-cache-entries"));
         } else if (arg == "--result-cache-bytes") {
             a.result_cache_bytes = (size_t) std::stoull(need("--result-cache-bytes"));
+        } else if (arg == "--compact-branches") {
+            a.compact_branches = true;
         } else if (arg == "--api-key") {
             a.api_key = need("--api-key");
         } else {
@@ -217,6 +221,7 @@ int main(int argc, char ** argv) {
         sopts.pcd_cache_bytes = args.pcd_cache_bytes;
         sopts.result_cache_entries = args.result_cache_entries;
         sopts.result_cache_bytes = args.result_cache_bytes;
+        sopts.compact_branches = args.compact_branches;
         anypii::run_server(engine, sopts);
     } catch (const std::exception & e) {
         std::cerr << "error: " << e.what() << "\n";

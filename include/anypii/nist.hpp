@@ -30,6 +30,8 @@ enum class PiiFormat {
     Mbi,
     Dea,
     Vin,
+    Passport,
+    AwsKey,
     Digits,
 };
 

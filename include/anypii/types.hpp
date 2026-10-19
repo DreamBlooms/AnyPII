@@ -75,6 +75,8 @@ struct PcdMetrics {
     int forward_passes = 0;
     std::string cache_status;
     std::size_t checkpoint_bytes = 0;
+    int prior_cache_hits = 0;
+    int prior_cache_entries = 0;
     PcdPhaseTimings phases;
 };
 

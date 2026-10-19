@@ -136,7 +136,7 @@ redacted)` 的多次出现会合并为一个 span。
 
 | 路径 | 条件 | 模型调用 |
 | --- | --- | --- |
-| 格式 | 正则命中的 NIST 格式名恰好匹配一个类型 id/说明（邮箱、电话、SSN、ITIN、EIN、支付卡、IBAN、IP、URL、API key、工单、案号、出生日期、NPI、MBI、DEA、VIN） | 0 |
+| 格式 | 正则命中的 NIST 格式名恰好匹配一个类型 id/说明（邮箱、电话、SSN、ITIN、EIN、支付卡、IBAN、IP、URL、API key、工单、案号、出生日期、NPI、MBI、DEA、VIN、护照号、AWS access key） | 0 |
 | 长度 | 数字候选的长度恰好出现在唯一类型说明中（`18位身份证号`、`16-19位银行卡号`） | 0 |
 | 高置信 | Pass A 的概率与领先幅度达到跳过阈值 | 类型精修 0 次 |
 | 描述先验 | 长度或 2 字以上描述重叠已足以确定类型 | 类型精修 0 次 |
@@ -191,6 +191,13 @@ redacted)` 的多次出现会合并为一个 span。
 `usage.readout`/`usage.pcd`。readout/PCD 的 prefix checkpoint 与候选生成 memo
 是独立的内部分缓存；只有结果缓存会跳过全部 decode。
 
+## Readout 布局
+
+`--compact-branches` 会缩短每个候选的类型分支 prompt，默认关闭，仅用于 A/B。
+当前测试中 medical 从约 3.7–4.0s 降到约 3.3s，medical-long 从约 12.8–14.4s
+降到约 9.8s，但有一次 legal 的 person span 丢失。除非已验证自己的类型集，
+生产环境建议保持标准布局。
+
 ## 温度与置信度
 
 `--temperature` 会在 softmax 前缩放受限 logits。它影响 readout 路径、PCD 的
@@ -214,7 +221,8 @@ prefix checkpoint（`--pcd-cache-entries`、`--pcd-cache-bytes`）。其类型�
 默认仍为 `"readout"`。PCD 在缓存命中时最快，并使用 readout 类型概率作为
 置信门控与先验；在真实姓名下，medical/legal 示例与 readout 结果一致，但占位名
 仍可能把部分标签提及扩展过长。因此它主要用于重复 schema 和基准测试。该模式的
-响应包含 `usage.pcd`（forward passes、缓存状态、checkpoint 字节数与阶段耗时）。readout 请求通过
+响应包含 `usage.pcd`（forward passes、缓存状态、checkpoint 字节数、prior-cache 命中
+与阶段耗时）。readout 请求通过
 `--readout-cache-entries`、`--readout-cache-bytes` 暴露有界前缀 checkpoint LRU，
 状态在 `usage.readout` 中。
 
@@ -297,6 +305,7 @@ CUDA 交叉编译时可用 `-DCMAKE_CUDA_ARCHITECTURES=89` 指定目标架构。
 --weak-pos-override LIST  覆盖降权词性集合（none 表示清空）
 --result-cache-entries N  缓存相同请求的结果数（默认 64）
 --result-cache-bytes BYTES  结果缓存预算（默认 64 MiB）
+--compact-branches  使用更短的类型分支 prompt（A/B）
 --api-key KEY       要求 Authorization: Bearer KEY
 --help              显示帮助
 ```
@@ -352,10 +361,10 @@ python3 tests/test_anypii.py
 测试脚本会在随机端口启动并停止服务，覆盖：
 
 - 医疗与联系信息的精确输出；
-- NIST 正则快速路径（SSN、ITIN、EIN、支付卡、IBAN、IPv6、出生日期、NPI、MBI、DEA、VIN），零 decode；
+- NIST 正则快速路径（SSN、ITIN、EIN、支付卡、IBAN、IPv6、出生日期、NPI、MBI、DEA、VIN、护照号、AWS access key），零 decode；
 - readout 与 PCD 的 prefix-checkpoint 缓存命中；
 - parrot/复读机 模式管线、typed parrot 与 `mask_style: "type"`；
-- 相同请求结果缓存；
+- 相同请求结果缓存与 PCD prior 缓存；
 - `omit_keep_spans` 输出过滤；
 - `redact` 翻转；
 - 等长遮罩与 typed 遮罩；
@@ -401,6 +410,10 @@ ANYPPI_URL=http://127.0.0.1:8080 python3 tests/test_anypii.py
 - [cppjieba](https://github.com/yanyiwu/cppjieba)（MIT）
 - [cpp-httplib](https://github.com/yhirose/cpp-httplib)（MIT）
 - [nlohmann/json](https://github.com/nlohmann/json)（MIT）
+
+PII 格式正则参考并交叉验证了
+[trackingplan/pii-regex-library](https://github.com/trackingplan/pii-regex-library)
+（MIT）与 PII Crawler 的正则指南。
 
 默认模型为 Qwen3.5-0.8B；模型权重为独立产物，适用其各自许可条款。
 

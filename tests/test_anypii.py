@@ -138,7 +138,8 @@ def test_nist_fast_path(c):
                 "SSN 123-45-6789; ITIN 912-70-1234; EIN 12-3456789; "
                 "card 4111 1111 1111 1111; IBAN GB82WEST12345698765432; "
                 "IP 2001:db8::1; DOB 1990-01-31; NPI 1234567893; "
-                "MBI 1EG4TE5MK73; DEA AB1234563; VIN 1HGCM82633A004352."
+                "MBI 1EG4TE5MK73; DEA AB1234563; VIN 1HGCM82633A004352; "
+                "passport A12345678; aws AKIAIOSFODNN7EXAMPLE."
             ),
             "policy": "Redact all of these.",
         },
@@ -154,6 +155,8 @@ def test_nist_fast_path(c):
             "mbi": {"description": "Medicare Beneficiary Identifier", "redact": True},
             "dea": {"description": "DEA registration number", "redact": True},
             "vin": {"description": "Vehicle Identification Number", "redact": True},
+            "passport": {"description": "Passport number", "redact": True},
+            "aws_key": {"description": "AWS access key", "redact": True},
         },
     }
     r = c.post(req)
@@ -161,7 +164,8 @@ def test_nist_fast_path(c):
     expected = (
         "SSN [REDACTED]; ITIN [REDACTED]; EIN [REDACTED]; card [REDACTED]; "
         "IBAN [REDACTED]; IP [REDACTED]; DOB [REDACTED]; NPI [REDACTED]; "
-        "MBI [REDACTED]; DEA [REDACTED]; VIN [REDACTED]."
+        "MBI [REDACTED]; DEA [REDACTED]; VIN [REDACTED]; passport [REDACTED]; "
+        "aws [REDACTED]."
     )
     assert r["redacted_text"] == expected, r["redacted_text"]
     got = {(s["type"], s["text"]) for s in r["spans"]}
@@ -176,6 +180,8 @@ def test_nist_fast_path(c):
     assert ("mbi", "1EG4TE5MK73") in got
     assert ("dea", "AB1234563") in got
     assert ("vin", "1HGCM82633A004352") in got
+    assert ("passport", "A12345678") in got
+    assert ("aws_key", "AKIAIOSFODNN7EXAMPLE") in got
     print("ok NIST fast path")
 
 
@@ -221,6 +227,7 @@ def test_pcd_mode(c):
     req2["threshold"] = 0.56  # bypass the result cache, keep the same PCD prefix
     r2 = c.post(req2)
     assert r2["usage"]["pcd"]["cache_status"] == "hit", r2["usage"]["pcd"]
+    assert r2["usage"]["pcd"]["prior_cache_hits"] > 0, r2["usage"]["pcd"]
     print("ok PCD mode")
 
 

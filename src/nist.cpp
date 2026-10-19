@@ -30,10 +30,10 @@ const std::vector<CompiledPattern> & compiled_patterns() {
          std::regex(R"((?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4})", std::regex::optimize)},
         {{R"([(（][0-9]{4}[)）][^\s，。；,;]{2,})", 1.25, PiiFormat::CaseNumber},
          std::regex(R"([(（][0-9]{4}[)）][^\s，。；,;]{2,})", std::regex::optimize)},
-        {{R"([0-9]{3}-[0-9]{2}-[0-9]{4})", 1.35, PiiFormat::Ssn},
-         std::regex(R"([0-9]{3}-[0-9]{2}-[0-9]{4})", std::regex::optimize)},
-        {{R"(9[0-9]{2}-[7-9][0-9]-[0-9]{4})", 1.35, PiiFormat::Itin},
-         std::regex(R"(9[0-9]{2}-[7-9][0-9]-[0-9]{4})", std::regex::optimize)},
+        {{R"([0-9]{3}[- ][0-9]{2}[- ][0-9]{4})", 1.35, PiiFormat::Ssn},
+         std::regex(R"([0-9]{3}[- ][0-9]{2}[- ][0-9]{4})", std::regex::optimize)},
+        {{R"(9[0-9]{2}[- ][7-9][0-9][- ][0-9]{4})", 1.35, PiiFormat::Itin},
+         std::regex(R"(9[0-9]{2}[- ][7-9][0-9][- ][0-9]{4})", std::regex::optimize)},
         {{R"([0-9]{2}-[0-9]{7})", 1.25, PiiFormat::Ein},
          std::regex(R"([0-9]{2}-[0-9]{7})", std::regex::optimize)},
         {{R"((?:[0-9][ -]?){12,18}[0-9])", 1.30, PiiFormat::CreditCard},
@@ -44,10 +44,19 @@ const std::vector<CompiledPattern> & compiled_patterns() {
           1.20, PiiFormat::Dob},
          std::regex(R"((?:19|20)[0-9]{2}[-/.](?:0[1-9]|1[0-2])[-/.](?:0[1-9]|[12][0-9]|3[01]))",
                     std::regex::optimize)},
+        {{R"(\b[A-Z][0-9]{8}\b)", 1.25, PiiFormat::Passport},
+         std::regex(R"(\b[A-Z][0-9]{8}\b)", std::regex::optimize)},
+        {{R"((?:AKIA|ASIA)[0-9A-Z]{16})", 1.35, PiiFormat::AwsKey},
+         std::regex(R"((?:AKIA|ASIA)[0-9A-Z]{16})", std::regex::optimize)},
         {{R"([0-9]{10})", 1.25, PiiFormat::Npi},
          std::regex(R"([0-9]{10})", std::regex::optimize)},
         {{R"((?:\+?86[- ]?)?1[3-9][0-9]{9})", 1.30, PiiFormat::Phone},
          std::regex(R"((?:\+?86[- ]?)?1[3-9][0-9]{9})", std::regex::optimize)},
+        {{R"(\b(?:\+?1[-. ]?)?(?:\([0-9]{3}\)|[0-9]{3})[-. ]?[0-9]{3}[-. ]?[0-9]{4}\b)",
+          1.30, PiiFormat::Phone},
+         std::regex(
+             R"(\b(?:\+?1[-. ]?)?(?:\([0-9]{3}\)|[0-9]{3})[-. ]?[0-9]{3}[-. ]?[0-9]{4}\b)",
+             std::regex::optimize)},
         {{R"(\+?[0-9][0-9 ()\-]{7,}[0-9])", 1.25, PiiFormat::Phone},
          std::regex(R"(\+?[0-9][0-9 ()\-]{7,}[0-9])", std::regex::optimize)},
         {{R"([A-Za-z]{1,6}[-_][A-Za-z0-9]{2,}(?:[-_][A-Za-z0-9]+)*)", 1.25, PiiFormat::Ticket},
@@ -93,18 +102,29 @@ bool luhn_ok(const std::string & s) {
     return sum % 10 == 0;
 }
 
+std::string compact_digits_separators(const std::string & s) {
+    std::string out;
+    for (char c : s) {
+        if (c >= '0' && c <= '9') out.push_back(c);
+    }
+    return out;
+}
+
 bool valid_ssn(const std::string & s) {
-    if (s.size() != 11 || s[3] != '-' || s[6] != '-') return false;
-    const int area = std::stoi(s.substr(0, 3));
-    const int group = std::stoi(s.substr(4, 2));
-    const int serial = std::stoi(s.substr(7, 4));
+    const std::string d = compact_digits_separators(s);
+    if (d.size() != 9) return false;
+    const int area = std::stoi(d.substr(0, 3));
+    const int group = std::stoi(d.substr(3, 2));
+    const int serial = std::stoi(d.substr(5, 4));
     return area != 0 && area != 666 && area < 900 && group != 0 && serial != 0;
 }
 
 bool valid_itin(const std::string & s) {
-    if (s.size() != 11 || s[3] != '-' || s[6] != '-') return false;
-    const int group = s[4] - '0';
-    return s[0] == '9' && group >= 7 && group <= 9;
+    const std::string d = compact_digits_separators(s);
+    if (d.size() != 9 || d[0] != '9') return false;
+    const int group = std::stoi(d.substr(3, 2));
+    return (group >= 50 && group <= 65) || (group >= 70 && group <= 88) ||
+           (group >= 90 && group <= 92) || (group >= 94 && group <= 99);
 }
 
 bool valid_ein(const std::string & s) {
@@ -406,6 +426,10 @@ bool type_matches_format(PiiFormat format, const TypeDef & type) {
             return has("dea") || has("drug enforcement administration");
         case PiiFormat::Vin:
             return has("vin") || has("vehicle identification number");
+        case PiiFormat::Passport:
+            return has("passport") || has("passport number");
+        case PiiFormat::AwsKey:
+            return has("aws") || has("access key id") || has("access key");
         default:
             return false;
     }
