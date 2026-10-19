@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <list>
 #include <stdexcept>
 #include <unordered_map>
 #include <iostream>
@@ -60,6 +61,18 @@ struct Engine::Impl {
     // off device: sequence 0 keeps it, and branch sequences share those cells.
     std::vector<llama_token> prefix_cache_tokens;
     std::string prefix_cache_text;
+    int readout_cache_entries = 4;
+    std::size_t readout_cache_bytes = 256ull * 1024 * 1024;
+    struct ReadoutCacheEntry {
+        std::vector<uint8_t> bytes;
+        int max_position = -1;
+        std::list<std::string>::iterator recency;
+    };
+    std::list<std::string> readout_order;
+    std::unordered_map<std::string, ReadoutCacheEntry> readout_cache;
+    std::size_t readout_cache_used = 0;
+    std::string last_readout_status;
+    std::size_t last_readout_checkpoint = 0;
     long long decode_calls = 0;
     double prefill_ms = 0.0;
     double batch_ms = 0.0;
@@ -133,6 +146,8 @@ Engine::Engine(const EngineOptions & options) : p(new Impl) {
     if (!p->ctx) throw std::runtime_error("failed to create llama context");
     p->n_ctx = (int) llama_n_ctx(p->ctx);
     p->n_batch = (int) llama_n_batch(p->ctx);
+    p->readout_cache_entries = std::max(0, options.readout_cache_entries);
+    p->readout_cache_bytes = options.readout_cache_bytes;
     p->gpu_layers = options.n_gpu_layers;
     p->supports_gpu = llama_supports_gpu_offload();
 
@@ -342,8 +357,39 @@ std::vector<std::vector<double>> Engine::decode_branches(
 
     // Sequence 0 owns the decoded prefix KV; branch sequences only add their
     // tails and are removed after each batch, so the prefix stays resident.
-    // Only re-prefill when the prefix actually changes.
-    if (!same_prefix) {
+    // On a prefix change, try a bounded host-checkpoint LRU before prefilling.
+    p->last_readout_checkpoint = 0;
+    bool restored = false;
+    std::string cache_status;
+    if (same_prefix) {
+        cache_status = "hit";
+    } else {
+        auto cit = p->readout_cache.find(prefix_text);
+        if (cit != p->readout_cache.end()) {
+            p->readout_order.splice(p->readout_order.begin(), p->readout_order,
+                                    cit->second.recency);
+            llama_memory_clear(mem, true);
+            SequenceCheckpoint checkpoint;
+            checkpoint.bytes = cit->second.bytes;
+            checkpoint.max_position = cit->second.max_position;
+            if (restore_sequence(0, checkpoint) &&
+                sequence_max_position(0) == P - 1) {
+                p->prefix_cache_tokens = prefix;
+                p->prefix_cache_text = prefix_text;
+                p->last_readout_checkpoint = checkpoint.bytes.size();
+                cache_status = "hit";
+                restored = true;
+            } else {
+                p->readout_cache_used -= cit->second.bytes.size();
+                p->readout_order.erase(cit->second.recency);
+                p->readout_cache.erase(cit);
+                cache_status = "fallback";
+            }
+        } else {
+            cache_status = "miss";
+        }
+    }
+    if (!same_prefix && !restored) {
         llama_memory_clear(mem, true);
         const int chunk_max = p->n_batch > 0 ? p->n_batch : std::max(1, P);
         for (int start = 0; start < P; start += chunk_max) {
@@ -370,7 +416,41 @@ std::vector<std::vector<double>> Engine::decode_branches(
         }
         p->prefix_cache_tokens = prefix;
         p->prefix_cache_text = prefix_text;
+        if (p->readout_cache_entries > 0 && p->readout_cache_bytes > 0) {
+            try {
+                const SequenceCheckpoint checkpoint = save_sequence(0);
+                const std::size_t bytes = checkpoint.bytes.size();
+                if (bytes <= p->readout_cache_bytes) {
+                    while (!p->readout_order.empty() &&
+                           (p->readout_cache.size() + 1 > (std::size_t) p->readout_cache_entries ||
+                            p->readout_cache_used + bytes > p->readout_cache_bytes)) {
+                        const std::string & key = p->readout_order.back();
+                        auto it = p->readout_cache.find(key);
+                        if (it != p->readout_cache.end()) {
+                            p->readout_cache_used -= it->second.bytes.size();
+                            p->readout_cache.erase(it);
+                        }
+                        p->readout_order.pop_back();
+                    }
+                    if (auto old = p->readout_cache.find(prefix_text);
+                        old != p->readout_cache.end()) {
+                        p->readout_cache_used -= old->second.bytes.size();
+                        p->readout_order.erase(old->second.recency);
+                        p->readout_cache.erase(old);
+                    }
+                    p->readout_order.push_front(prefix_text);
+                    p->readout_cache[prefix_text] =
+                        {checkpoint.bytes, checkpoint.max_position,
+                         p->readout_order.begin()};
+                    p->readout_cache_used += bytes;
+                    p->last_readout_checkpoint = bytes;
+                }
+            } catch (...) {
+                // Checkpoints are an optimization; prefill still succeeded.
+            }
+        }
     }
+    p->last_readout_status = cache_status;
 
     std::vector<std::vector<llama_token>> all_tails(branches.size());
     int max_tail = 0;
@@ -570,6 +650,10 @@ bool Engine::restore_sequence(int seq, const SequenceCheckpoint & checkpoint) {
 }
 
 int Engine::n_seq_max() const { return llama_n_seq_max(p->ctx); }
+
+std::string Engine::readout_cache_status() const { return p->last_readout_status; }
+std::size_t Engine::readout_cache_entries() const { return p->readout_cache.size(); }
+std::size_t Engine::readout_checkpoint_bytes() const { return p->last_readout_checkpoint; }
 
 std::string Engine::token_to_piece(llama_token token) const { return p->token_to_piece(token); }
 std::string Engine::model_name() const { return p->model_desc; }

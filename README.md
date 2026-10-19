@@ -158,13 +158,17 @@ Set `"mode": "pcd"` to use the Parallel Constrained Decoding backend adapted
 from [pcdServer](https://github.com/stephanj/pcdServer). It renders bounded
 fields, broadcasts one sequence per field, scores only the allowed choice
 tokens, resolves shared token prefixes with a collision tree, and caches prefix
-checkpoints (`--pcd-cache-entries`, `--pcd-cache-bytes`).
+checkpoints (`--pcd-cache-entries`, `--pcd-cache-bytes`). Its type stage
+uses the readout type pass as a confidence gate and prior, which suppresses
+over-eager assignments on non-entity spans.
 
 The default remains `"readout"`. In current tests PCD is faster on cache hits
 but less accurate on dynamic spans (it can over-extend a patient/drug mention),
 so it is intended for repeated identical schemas and benchmarking. Responses in
 this mode include `usage.pcd` with forward passes, cache status, checkpoint
-bytes, and phase timings.
+bytes, and phase timings. Readout requests expose a bounded prefix
+checkpoint LRU (`--readout-cache-entries`, `--readout-cache-bytes`) through
+`usage.readout`.
 
 ## Build
 
@@ -227,6 +231,8 @@ the target with `-DCMAKE_CUDA_ARCHITECTURES=89`.
 --none-margin-redact M   margin for redact:true types (default 0.20)
 --pcd-cache-entries N    PCD prefix checkpoint entries (default 4)
 --pcd-cache-bytes BYTES  PCD prefix checkpoint budget (default 256 MiB)
+--readout-cache-entries N  readout prefix checkpoint entries (default 4)
+--readout-cache-bytes BYTES readout prefix checkpoint budget (default 256 MiB)
 --api-key KEY       require Authorization: Bearer KEY
 --help              show this help
 ```
@@ -255,7 +261,7 @@ Response:
 | `redacted_text` | original text with redacted spans replaced |
 | `spans[]` | `{type, text, redacted, occurrences: [{start, end, score[, redact_score]}]}` |
 | `model`, `backend` | loaded model and compute backend |
-| `usage` | `{decodes, branches, generated_tokens, fallback[, pcd]}` |
+| `usage` | `{decodes, branches, generated_tokens, fallback[, readout][, pcd]}` |
 
 `score` is the readout/arbitration confidence (request-driven priors can
 contribute); it is not a calibrated probability. `redact_score` is only present

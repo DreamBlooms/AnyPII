@@ -134,12 +134,15 @@ redacted)` 的多次出现会合并为一个 span。
 设置 `"mode": "pcd"` 可启用从 [pcdServer](https://github.com/stephanj/pcdServer)
 适配的并行约束解码后端。它把决策渲染为有界字段，每个字段一条 sequence，
 只对允许的 choice token 打分，用 collision tree 消歧共享 token 前缀，并缓存
-prefix checkpoint（`--pcd-cache-entries`、`--pcd-cache-bytes`）。
+prefix checkpoint（`--pcd-cache-entries`、`--pcd-cache-bytes`）。其类型阶段
+使用 readout 类型判定作为置信门控与先验，抑制对非实体片段的过度分类。
 
 默认仍为 `"readout"`。当前离线测试中，PCD 在缓存命中时更快，但对动态 span
 的准确率较低（可能把患者/药品提及扩展过长），因此主要用于重复 schema 和
 基准测试。该模式的响应包含 `usage.pcd`（forward passes、缓存状态、
-checkpoint 字节数与阶段耗时）。
+checkpoint 字节数与阶段耗时）。readout 请求通过
+`--readout-cache-entries`、`--readout-cache-bytes` 暴露有界前缀 checkpoint LRU，
+状态在 `usage.readout` 中。
 
 ## 构建
 
@@ -199,6 +202,8 @@ CUDA 交叉编译时可用 `-DCMAKE_CUDA_ARCHITECTURES=89` 指定目标架构。
 --none-margin-redact M   redact:true 类型的最小置信差（默认 0.20）
 --pcd-cache-entries N    PCD 前缀 checkpoint 条目数（默认 4）
 --pcd-cache-bytes BYTES  PCD 前缀 checkpoint 预算（默认 256 MiB）
+--readout-cache-entries N  readout 前缀 checkpoint 条目数（默认 4）
+--readout-cache-bytes BYTES readout 前缀 checkpoint 预算（默认 256 MiB）
 --api-key KEY       要求 Authorization: Bearer KEY
 --help              显示帮助
 ```
@@ -227,7 +232,7 @@ CUDA 交叉编译时可用 `-DCMAKE_CUDA_ARCHITECTURES=89` 指定目标架构。
 | `redacted_text` | 打码后的文本 |
 | `spans[]` | `{type, text, redacted, occurrences: [{start, end, score[, redact_score]}]}` |
 | `model`, `backend` | 模型与计算后端 |
-| `usage` | `{decodes, branches, generated_tokens, fallback[, pcd]}` |
+| `usage` | `{decodes, branches, generated_tokens, fallback[, readout][, pcd]}` |
 
 `score` 是由 readout 与裁决得到的置信度，包含请求驱动先验的影响，并非校准概率。
 `redact_score` 仅在 `"auto"` 类型时返回。同一 `(type, text, redacted)` 的多次出现

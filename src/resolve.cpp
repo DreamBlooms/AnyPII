@@ -31,6 +31,7 @@ struct CandScore {
     double secondp = 0.0;
     double exactp = 0.0;
     double none_p = 0.0;
+    std::vector<double> probs;
 };
 
 struct Component {
@@ -344,6 +345,66 @@ void emit_grouped(AnyPiiResult & out, const Utf8Text & text,
 
 } // namespace
 
+std::vector<CandScore> readout_type_scores(
+        Engine & engine, const TypeTable & table, const AnyPiiRequest & request,
+        const Utf8Text & text, const std::vector<Candidate> & candidates,
+        const ResolveOptions & options, AnyPiiResult & out) {
+    std::vector<CandScore> scores(candidates.size());
+    if (candidates.empty()) return scores;
+    const int type_count = (int) table.types.size();
+    BranchSet set = build_type_branches(engine, table, request, text, candidates);
+    const auto probs = engine.decode_branches(set.prefix, set.branches,
+                                              options.max_branches_per_decode,
+                                              options.temperature);
+    account_branches(out, set.branches.size(), options.max_branches_per_decode);
+    for (size_t i = 0; i < candidates.size() && i < probs.size(); ++i) {
+        std::vector<double> p = probs[i];
+        if ((int) p.size() <= type_count) continue;
+        const Utf8Text span_text = decode_utf8(candidates[i].text);
+        double norm = 0.0;
+        for (int t = 0; t < type_count; ++t) {
+            p[(size_t) t] *= lexical_type_bonus(span_text, table.types[(size_t) t]);
+            p[(size_t) t] *= length_type_bonus(candidates[i].end - candidates[i].start,
+                                               table.types[(size_t) t]);
+            norm += p[(size_t) t];
+        }
+        norm += p[(size_t) type_count];
+        if (norm > 0.0) {
+            for (double & v : p) v /= norm;
+        }
+        CandScore cs;
+        cs.exactp = 1.0;
+        cs.probs = p;
+        for (int t = 0; t < type_count; ++t) {
+            if (p[(size_t) t] > cs.bestp) {
+                cs.second = cs.best;
+                cs.secondp = cs.bestp;
+                cs.best = t;
+                cs.bestp = p[(size_t) t];
+            } else if (p[(size_t) t] > cs.secondp) {
+                cs.second = t;
+                cs.secondp = p[(size_t) t];
+            }
+        }
+        cs.none_p = p[(size_t) type_count];
+        const int cand_len = candidates[i].end - candidates[i].start;
+        const bool apply_margin = cand_len <= options.none_margin_max_len;
+        const double margin =
+            (cs.best >= 0 && table.types[(size_t) cs.best].redact == RedactMode::Redact)
+                ? options.none_margin_redact
+                : options.none_margin;
+        if (cs.best < 0 ||
+            (apply_margin && (cs.none_p >= cs.bestp || cs.bestp - cs.none_p < margin))) {
+            cs.best = -1;
+            cs.second = -1;
+            cs.secondp = 0.0;
+            cs.bestp = cs.none_p;
+        }
+        scores[i] = std::move(cs);
+    }
+    return scores;
+}
+
 AnyPiiResult run_pcd_pipeline(Engine & engine, const AnyPiiRequest & request,
                               const ResolveOptions & options) {
     AnyPiiResult out;
@@ -548,6 +609,37 @@ AnyPiiResult run_pcd_pipeline(Engine & engine, const AnyPiiRequest & request,
         return out;
     }
 
+    // Completeness prior: extend a short selected candidate to the longest
+    // containing candidate (Alice -> Alice Johnson, 赵敏 -> 责任护士赵敏).
+    {
+        std::vector<int> extended;
+        for (int c : selected_cands) {
+            int best = c;
+            int best_len = candidates[(size_t) c].end - candidates[(size_t) c].start;
+            for (int m = 0; m < (int) candidates.size(); ++m) {
+                if (m == c) continue;
+                if (!(candidates[(size_t) m].start <= candidates[(size_t) c].start &&
+                      candidates[(size_t) m].end >= candidates[(size_t) c].end)) {
+                    continue;
+                }
+                if (candidates[(size_t) m].prior < 1.0) continue;
+                if (boundary_factor(candidates[(size_t) m].text) < 0.60) continue;
+                const int len = candidates[(size_t) m].end - candidates[(size_t) m].start;
+                if (len > best_len) { best = m; best_len = len; }
+            }
+            bool duplicate = false;
+            for (int e : extended) {
+                if (candidates[(size_t) e].start == candidates[(size_t) best].start &&
+                    candidates[(size_t) e].end == candidates[(size_t) best].end) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (!duplicate) extended.push_back(best);
+        }
+        selected_cands.swap(extended);
+    }
+
     // ---------- Type stage: one PCD field per selected span ----------
     std::vector<int> t_cands;
     std::vector<PcdField> tfields;
@@ -571,6 +663,12 @@ AnyPiiResult run_pcd_pipeline(Engine & engine, const AnyPiiRequest & request,
         tfields.push_back(std::move(f));
     }
 
+    std::vector<Candidate> t_candidates;
+    t_candidates.reserve(t_cands.size());
+    for (int c : t_cands) t_candidates.push_back(candidates[(size_t) c]);
+    const std::vector<CandScore> t_prior =
+        readout_type_scores(engine, table, request, text, t_candidates, options, out);
+
     if (!tfields.empty()) {
         const std::string policy = request.policy.empty() ? "none" : request.policy;
         const std::string sys =
@@ -585,23 +683,51 @@ AnyPiiResult run_pcd_pipeline(Engine & engine, const AnyPiiRequest & request,
                           << candidates[(size_t) t_cands[idx]].text << "] value=["
                           << r.value << "] p=" << r.probability << "\n";
             }
-            if (idx >= t_cands.size() || r.value == "none") return;
+            if (idx >= t_cands.size()) return;
+            const CandScore & rd = t_prior[(size_t) idx];
+            if (rd.probs.empty()) return;
+            const int span_len = candidates[(size_t) t_cands[idx]].end -
+                                 candidates[(size_t) t_cands[idx]].start;
+            // The readout type pass is the confidence gate. Short redact:true
+            // names may pass on the PCD/readout combination even when Pass A is
+            // just under threshold (this preserves 李四 while suppressing
+            // longer non-entity spans such as 肺炎入院).
+            const bool short_redact =
+                rd.best >= 0 && span_len <= 3 &&
+                table.types[(size_t) rd.best].redact == RedactMode::Redact;
+            if ((rd.best < 0 || rd.bestp < request.threshold) && !short_redact) return;
+
+            const auto & field = tfields[idx];
+            const auto & rp = r.probabilities;
+            double sum = 0.0;
+            double best = 0.0;
+            int best_choice = -1;
+            for (size_t j = 0; j < field.choices.size(); ++j) {
+                double prior = 0.0;
+                if (field.choices[j] == "none") {
+                    prior = rd.probs.back();
+                } else {
+                    for (int t = 0; t < type_count; ++t) {
+                        const std::string prefix = table.types[(size_t) t].id + ":";
+                        if (field.choices[j].rfind(prefix, 0) == 0) {
+                            prior = rd.probs[(size_t) t];
+                            break;
+                        }
+                    }
+                }
+                const double v = (j < rp.size() ? rp[j] : 0.0) * prior;
+                sum += v;
+                if (v > best) { best = v; best_choice = (int) j; }
+            }
+            if (best_choice < 0 || sum <= 0.0) return;
+            const std::string & chosen = field.choices[(size_t) best_choice];
+            if (chosen == "none") return;
             int type = -1;
             for (int t = 0; t < type_count; ++t) {
                 const std::string prefix = table.types[(size_t) t].id + ":";
-                if (r.value.rfind(prefix, 0) == 0) { type = t; break; }
+                if (chosen.rfind(prefix, 0) == 0) { type = t; break; }
             }
-            if (type < 0 || r.probability < request.threshold) return;
-            const int span_len = candidates[(size_t) t_cands[idx]].end -
-                                 candidates[(size_t) t_cands[idx]].start;
-            if (span_len <= options.none_margin_max_len) {
-                const double none_p = r.probabilities.empty() ? 0.0 : r.probabilities.back();
-                const double margin =
-                    table.types[(size_t) type].redact == RedactMode::Redact
-                        ? options.none_margin_redact
-                        : options.none_margin;
-                if (r.probability - none_p < margin) return;
-            }
+            if (type < 0) return;
             if (request.skip_keep_types &&
                 table.types[(size_t) type].redact == RedactMode::Keep) {
                 return;
@@ -611,7 +737,7 @@ AnyPiiResult run_pcd_pipeline(Engine & engine, const AnyPiiRequest & request,
             h.end = candidates[(size_t) t_cands[idx]].end;
             h.text = candidates[(size_t) t_cands[idx]].text;
             h.type = table.types[(size_t) type].id;
-            h.score = r.probability;
+            h.score = rd.bestp;
             h.redacted = false;
             hits.push_back(std::move(h));
         });
@@ -695,6 +821,14 @@ AnyPiiResult run_pipeline(Engine & engine, const AnyPiiRequest & request,
     AnyPiiResult out;
     out.model = engine.model_name();
     out.backend = engine.backend_name();
+    auto capture_readout_cache = [&]() {
+        if (!out.readout_cache_status.empty()) return;
+        const std::string status = engine.readout_cache_status();
+        if (status.empty()) return;
+        out.readout_cache_status = status;
+        out.readout_cache_entries = engine.readout_cache_entries();
+        out.readout_checkpoint_bytes = engine.readout_checkpoint_bytes();
+    };
 
     const Utf8Text text = decode_utf8(request.text);
     if (text.size() > options.max_text_cp) {
@@ -912,6 +1046,7 @@ AnyPiiResult run_pipeline(Engine & engine, const AnyPiiRequest & request,
                                                   options.max_branches_per_decode,
                                                   options.temperature);
         account_branches(out, set.branches.size(), options.max_branches_per_decode);
+        capture_readout_cache();
 
         std::vector<CandScore> unique_scores(pass_a.size());
         for (size_t u = 0; u < pass_a.size(); ++u) {
@@ -931,6 +1066,7 @@ AnyPiiResult run_pipeline(Engine & engine, const AnyPiiRequest & request,
             }
             CandScore cs;
             cs.exactp = 1.0;
+            cs.probs = p;
             for (int t = 0; t < type_count; ++t) {
                 if (p[(size_t) t] > cs.bestp) {
                     cs.second = cs.best;
@@ -1114,6 +1250,7 @@ AnyPiiResult run_pipeline(Engine & engine, const AnyPiiRequest & request,
                                                   options.max_branches_per_decode,
                                                   options.temperature);
         account_branches(out, set.branches.size(), options.max_branches_per_decode);
+        capture_readout_cache();
         for (size_t k = 0; k < pair_meta.size(); ++k) {
             const int pi = pair_meta[k].pair_index;
             if (pi < 0 || 2 * pi + 1 >= (int) probs.size()) continue;
@@ -1324,6 +1461,7 @@ AnyPiiResult run_pipeline(Engine & engine, const AnyPiiRequest & request,
                                                   options.max_branches_per_decode,
                                                   options.temperature);
         account_branches(out, set.branches.size(), options.max_branches_per_decode);
+        capture_readout_cache();
 
         for (size_t k = 0; k < type_meta.size(); ++k) {
             const int pi = type_meta[k].pair_index;
@@ -1460,6 +1598,7 @@ finalize:
                                                   options.max_branches_per_decode,
                                                   options.temperature);
         account_branches(out, set.branches.size(), options.max_branches_per_decode);
+        capture_readout_cache();
         for (size_t i = 0; i < auto_items.size() && 2 * i + 1 < probs.size(); ++i) {
             const auto & pf = probs[2 * i];
             const auto & pr = probs[2 * i + 1];

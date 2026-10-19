@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -87,6 +88,9 @@ struct AnyPiiResult {
     bool fallback = false;
     bool pcd = false;
     PcdMetrics pcd_metrics;
+    std::string readout_cache_status;
+    std::size_t readout_cache_entries = 0;
+    std::size_t readout_checkpoint_bytes = 0;
 };
 
 } // namespace anypii

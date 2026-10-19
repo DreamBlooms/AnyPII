@@ -156,6 +156,13 @@ json to_json(const AnyPiiResult & result) {
         {"generated_tokens", result.generated_tokens},
         {"fallback", result.fallback},
     };
+    if (!result.readout_cache_status.empty()) {
+        out["usage"]["readout"] = {
+            {"cache_status", result.readout_cache_status},
+            {"cache_entries", result.readout_cache_entries},
+            {"checkpoint_bytes", result.readout_checkpoint_bytes},
+        };
+    }
     if (result.pcd) {
         out["usage"]["pcd"] = {
             {"forward_passes", result.pcd_metrics.forward_passes},

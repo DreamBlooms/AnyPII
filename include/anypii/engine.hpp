@@ -17,6 +17,8 @@ struct EngineOptions {
     int n_threads = 0;
     int n_gpu_layers = 0;
     int max_branches = 32;
+    int readout_cache_entries = 4;
+    std::size_t readout_cache_bytes = 256ull * 1024 * 1024;
     llama_flash_attn_type flash_attn = LLAMA_FLASH_ATTN_TYPE_AUTO;
 };
 
@@ -102,6 +104,11 @@ public:
     SequenceCheckpoint save_sequence(int seq) const;
     bool restore_sequence(int seq, const SequenceCheckpoint & checkpoint);
     int n_seq_max() const;
+
+    // Readout prefix-checkpoint cache status after the last decode_branches.
+    std::string readout_cache_status() const;
+    std::size_t readout_cache_entries() const;
+    std::size_t readout_checkpoint_bytes() const;
 
     std::string token_to_piece(llama_token token) const;
     std::string model_name() const;

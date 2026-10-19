@@ -169,6 +169,18 @@ def test_nist_fast_path(c):
     print("ok NIST fast path")
 
 
+def test_readout_cache(c):
+    req = {
+        "state": {"text": "张三来访。", "policy": "打码人名。"},
+        "types": {"person": {"description": "person name", "redact": True}},
+    }
+    r1 = c.post(req)
+    assert r1["usage"]["readout"]["cache_status"] in ("miss", "hit"), r1["usage"]
+    r2 = c.post(req)
+    assert r2["usage"]["readout"]["cache_status"] == "hit", r2["usage"]
+    print("ok readout cache")
+
+
 def test_pcd_mode(c):
     req = {
         "state": {"text": "张三来访。", "policy": "打码人名。"},
@@ -333,6 +345,7 @@ def main():
         test_medical(c)
         test_contact(c)
         test_nist_fast_path(c)
+        test_readout_cache(c)
         test_pcd_mode(c)
         test_redact_flip(c)
         test_length_mask(c)

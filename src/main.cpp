@@ -27,6 +27,8 @@ struct Args {
     double none_margin_redact = 0.20;
     int pcd_cache_entries = 4;
     size_t pcd_cache_bytes = 256ull * 1024 * 1024;
+    int readout_cache_entries = 4;
+    size_t readout_cache_bytes = 256ull * 1024 * 1024;
 };
 
 void usage(const char * argv0) {
@@ -52,6 +54,8 @@ void usage(const char * argv0) {
         << "  --none-margin-redact M   margin for redact:true types (default 0.20)\n"
         << "  --pcd-cache-entries N    PCD prefix checkpoint entries (default 4)\n"
         << "  --pcd-cache-bytes BYTES  PCD prefix checkpoint budget (default 256 MiB)\n"
+        << "  --readout-cache-entries N  readout prefix checkpoint entries (default 4)\n"
+        << "  --readout-cache-bytes BYTES readout prefix checkpoint budget (default 256 MiB)\n"
         << "  --api-key KEY       require Authorization: Bearer KEY\n"
         << "  --help              show this help\n";
 }
@@ -114,6 +118,10 @@ Args parse_args(int argc, char ** argv) {
             a.pcd_cache_entries = std::stoi(need("--pcd-cache-entries"));
         } else if (arg == "--pcd-cache-bytes") {
             a.pcd_cache_bytes = (size_t) std::stoull(need("--pcd-cache-bytes"));
+        } else if (arg == "--readout-cache-entries") {
+            a.readout_cache_entries = std::stoi(need("--readout-cache-entries"));
+        } else if (arg == "--readout-cache-bytes") {
+            a.readout_cache_bytes = (size_t) std::stoull(need("--readout-cache-bytes"));
         } else if (arg == "--api-key") {
             a.api_key = need("--api-key");
         } else {
@@ -136,6 +144,8 @@ int main(int argc, char ** argv) {
         eopts.n_ubatch = args.n_ubatch;
         eopts.n_gpu_layers = args.gpu_layers;
         eopts.max_branches = args.max_branches;
+        eopts.readout_cache_entries = args.readout_cache_entries;
+        eopts.readout_cache_bytes = args.readout_cache_bytes;
         eopts.flash_attn = args.flash_attn;
 
         std::cerr << "loading model: " << eopts.model_path << "\n";
