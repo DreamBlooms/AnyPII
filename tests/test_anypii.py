@@ -85,14 +85,14 @@ def keep_texts(result):
     return [x for (_, _, _, x, r) in flat_spans(result) if not r]
 
 
-MEDICAL_TEXT = "患者[REDACTED]因肺炎入院。主治医师王芳、责任护士赵敏。予阿莫西林（商品名[REDACTED]，[REDACTED]）抗感染。"
+MEDICAL_TEXT = "患者[REDACTED]因肺炎入院。主治医师林婉清、责任护士周雅琴。予阿莫西林（商品名[REDACTED]，[REDACTED]）抗感染。"
 MEDICAL_SPANS = [
-    ("patient_name", 2, 5, "李小明", True),
-    ("clinician_name", 15, 17, "王芳", False),
-    ("clinician_name", 22, 24, "赵敏", False),
-    ("drug_generic", 26, 30, "阿莫西林", False),
-    ("drug_brand", 34, 37, "阿莫仙", True),
-    ("pharma_company", 38, 42, "辉瑞制药", True),
+    ("patient_name", 2, 5, "陈思远", True),
+    ("clinician_name", 11, 18, "主治医师林婉清", False),
+    ("clinician_name", 19, 26, "责任护士周雅琴", False),
+    ("drug_generic", 28, 32, "阿莫西林", False),
+    ("drug_brand", 36, 39, "阿莫仙", True),
+    ("pharma_company", 40, 44, "辉瑞制药", True),
 ]
 
 CONTACT_TEXT = "联系人手机 [REDACTED]，邮箱 [REDACTED]；工单 TCK-2024-0912 已受理。"
@@ -107,13 +107,13 @@ def test_medical(c):
     r = c.post(load("medical.json"))
     assert r["redacted_text"] == MEDICAL_TEXT, r["redacted_text"]
     assert redacted_spans(r) == [
-        ("patient_name", 2, 5, "李小明"),
-        ("drug_brand", 34, 37, "阿莫仙"),
-        ("pharma_company", 38, 42, "辉瑞制药"),
+        ("patient_name", 2, 5, "陈思远"),
+        ("drug_brand", 36, 39, "阿莫仙"),
+        ("pharma_company", 40, 44, "辉瑞制药"),
     ], flat_spans(r)
     keeps = keep_texts(r)
-    assert any("王芳" in x for x in keeps), keeps
-    assert any("赵敏" in x for x in keeps), keeps
+    assert any("林婉清" in x for x in keeps), keeps
+    assert any("周雅琴" in x for x in keeps), keeps
     assert any("阿莫西林" in x for x in keeps), keeps
     assert r["usage"]["generated_tokens"] == 0
     print("ok medical")
@@ -200,7 +200,7 @@ def test_redact_flip(c):
     req["types"]["patient_name"]["redact"] = False
     req["types"]["clinician_name"]["redact"] = True
     r = c.post(req)
-    expected = "患者李小明因肺炎入院。[REDACTED]、[REDACTED]。予阿莫西林（商品名[REDACTED]，[REDACTED]）抗感染。"
+    expected = "患者陈思远因肺炎入院。[REDACTED]、[REDACTED]。予阿莫西林（商品名[REDACTED]，[REDACTED]）抗感染。"
     assert r["redacted_text"] == expected, r["redacted_text"]
     def find(needle):
         for span in r["spans"]:
@@ -208,9 +208,9 @@ def test_redact_flip(c):
                 return span
         raise AssertionError(f"missing span containing {needle}: {r['spans']}")
 
-    assert find("李小明")["redacted"] is False
-    assert find("王芳")["redacted"] is True
-    assert find("赵敏")["redacted"] is True
+    assert find("陈思远")["redacted"] is False
+    assert find("林婉清")["redacted"] is True
+    assert find("周雅琴")["redacted"] is True
     print("ok redact flip")
 
 
@@ -240,9 +240,9 @@ def test_skip_keep_types(c):
     r = c.post(req)
     assert r["redacted_text"] == MEDICAL_TEXT, r["redacted_text"]
     expected = [
-        ("patient_name", 2, 5, "李小明", True),
-        ("drug_brand", 34, 37, "阿莫仙", True),
-        ("pharma_company", 38, 42, "辉瑞制药", True),
+        ("patient_name", 2, 5, "陈思远", True),
+        ("drug_brand", 36, 39, "阿莫仙", True),
+        ("pharma_company", 40, 44, "辉瑞制药", True),
     ]
     assert_spans(r, expected)
     print("ok skip_keep_types")
@@ -265,7 +265,7 @@ def test_typed_mask(c):
     req["mask_style"] = "typed"
     r = c.post(req)
     expected = (
-        "患者[patient_name:0]因肺炎入院。主治医师王芳、责任护士赵敏。"
+        "患者[patient_name:0]因肺炎入院。主治医师林婉清、责任护士周雅琴。"
         "予阿莫西林（商品名[drug_brand:4]，[pharma_company:5]）抗感染。"
     )
     assert r["redacted_text"] == expected, r["redacted_text"]

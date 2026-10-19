@@ -25,23 +25,41 @@ spans。
 以下请求使用五个由调用方定义的类型，对一段医疗文本进行脱敏：
 
 ```sh
-curl http://127.0.0.1:8080/v1/anypii -H 'Content-Type: application/json' -d @examples/medical.json
+curl -s http://127.0.0.1:8080/v1/anypii \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "state": {
+      "text": "患者陈思远因肺炎入院。主治医师林婉清、责任护士周雅琴。予阿莫西林（商品名阿莫仙，辉瑞制药）抗感染。",
+      "policy": "打码患者姓名；不要打码医生与护士姓名；打码药厂名、药物品牌名与商品名；保留药品通用名。"
+    },
+    "types": {
+      "patient_name": {"description": "患者或患儿的姓名，不是医务人员。", "redact": true},
+      "clinician_name": {"description": "医生、护士、药师等医务人员姓名。", "redact": false},
+      "pharma_company": {"description": "药厂、制药企业名称。", "redact": true},
+      "drug_brand": {"description": "药品品牌名、商品名、商标名。", "redact": true},
+      "drug_generic": {"description": "药品通用名、成分名、INN。", "redact": false}
+    },
+    "threshold": 0.55,
+    "mask_style": "token"
+  }'
+
 ```
 
 ```json
 {
-  "redacted_text": "患者[REDACTED]因肺炎入院。主治医师王芳、责任护士赵敏。予阿莫西林（商品名[REDACTED]，[REDACTED]）抗感染。",
+  "redacted_text": "患者[REDACTED]因肺炎入院。主治医师林婉清、责任护士周雅琴。予阿莫西林（商品名[REDACTED]，[REDACTED]）抗感染。",
   "spans": [
-    {"type": "patient_name",   "text": "李小明",   "redacted": true,  "occurrences": [{"start": 2,  "end": 5,  "score": 0.965}]},
-    {"type": "clinician_name", "text": "王芳",     "redacted": false, "occurrences": [{"start": 15, "end": 17, "score": 0.933}]},
-    {"type": "clinician_name", "text": "赵敏",     "redacted": false, "occurrences": [{"start": 22, "end": 24, "score": 0.846}]},
-    {"type": "drug_generic",   "text": "阿莫西林", "redacted": false, "occurrences": [{"start": 26, "end": 30, "score": 0.968}]},
-    {"type": "drug_brand",     "text": "阿莫仙",   "redacted": true,  "occurrences": [{"start": 34, "end": 37, "score": 0.879}]},
-    {"type": "pharma_company", "text": "辉瑞制药", "redacted": true,  "occurrences": [{"start": 38, "end": 42, "score": 0.865}]}
+    {"type": "patient_name",   "text": "陈思远",         "redacted": true,  "occurrences": [{"start": 2,  "end": 5,  "score": 0.995}]},
+    {"type": "clinician_name", "text": "主治医师林婉清", "redacted": false, "occurrences": [{"start": 11, "end": 18, "score": 0.952}]},
+    {"type": "clinician_name", "text": "责任护士周雅琴", "redacted": false, "occurrences": [{"start": 19, "end": 26, "score": 0.633}]},
+    {"type": "drug_generic",   "text": "阿莫西林",       "redacted": false, "occurrences": [{"start": 28, "end": 32, "score": 0.962}]},
+    {"type": "drug_brand",     "text": "阿莫仙",         "redacted": true,  "occurrences": [{"start": 36, "end": 39, "score": 0.899}]},
+    {"type": "pharma_company", "text": "辉瑞制药",       "redacted": true,  "occurrences": [{"start": 40, "end": 44, "score": 0.798}]}
   ],
   "model": "qwen35 0.8B Q8_0",
   "backend": "qwen35 0.8B Q8_0 / llama.cpp CPU",
-  "usage": {"decodes": 4, "branches": 17, "generated_tokens": 0, "fallback": false}
+  "usage": {"decodes": 6, "branches": 20, "generated_tokens": 0, "fallback": false,
+            "readout": {"cache_status": "miss", "cache_entries": 1, "checkpoint_bytes": 23637148}}
 }
 ```
 
@@ -71,7 +89,7 @@ curl http://127.0.0.1:8080/v1/anypii -H 'Content-Type: application/json' -d @exa
    比 `none` 高出 `--none-margin`（默认 0.65）。
 3. **边界判定。** 重叠候选构成一个组件。对最强候选与最长合理变体分别按正序和
    反序进行成对比较；若胜者是另一候选的严格子串且两者权重接近，则选择更长的
-   完整片段。用于区分 `患者李小明`、`李小明` 与 `患者`。
+   完整片段。用于区分 `患者陈思远`、`陈思远` 与 `患者`。
 4. **类型精修。** 对歧义片段进行类型成对读取。候选类型由调用方提供的说明驱动：
    精确数字长度（`18位`、`16-19位`）以及 2 字以上公共子串
    （`辉瑞制药` 与 `药厂、制药企业`）。高置信片段及可由先验确定的类型跳过该阶段。
@@ -129,6 +147,18 @@ redacted)` 的多次出现会合并为一个 span。
 并省略其输出，同时直接跳过格式匹配的保留类型候选（例如工单号），不产生 span。
 若所有类型均为保留类型，则直接返回原文，不执行 decode。
 
+## 温度与置信度
+
+`--temperature` 会在 softmax 前缩放受限 logits。它影响 readout 路径，以及 PCD
+使用的 readout 先验；PCD 自身的 choice 打分仍使用原始 logits。建议起点：
+
+- `0.85–0.95`：更高的精确率，减少边缘 keep span，但可能漏掉歧义姓名或 ID。
+- `1.0`：默认值。
+- `1.1–1.3`：更高召回，但会增加误保留 span 和过度扩展。
+
+请与 `--none-margin`（保留类型）、`--none-margin-redact`（`redact:true` 类型）
+以及请求级 `threshold` 配合调整；修改后重新跑 examples 或测试。
+
 ## 实验性 PCD 路径
 
 设置 `"mode": "pcd"` 可启用从 [pcdServer](https://github.com/stephanj/pcdServer)
@@ -137,10 +167,10 @@ redacted)` 的多次出现会合并为一个 span。
 prefix checkpoint（`--pcd-cache-entries`、`--pcd-cache-bytes`）。其类型阶段
 使用 readout 类型判定作为置信门控与先验，抑制对非实体片段的过度分类。
 
-默认仍为 `"readout"`。当前离线测试中，PCD 在缓存命中时更快，但对动态 span
-的准确率较低（可能把患者/药品提及扩展过长），因此主要用于重复 schema 和
-基准测试。该模式的响应包含 `usage.pcd`（forward passes、缓存状态、
-checkpoint 字节数与阶段耗时）。readout 请求通过
+默认仍为 `"readout"`。PCD 在缓存命中时最快，并使用 readout 类型概率作为
+置信门控与先验；在真实姓名下，medical/legal 示例与 readout 结果一致，但占位名
+仍可能把部分标签提及扩展过长。因此它主要用于重复 schema 和基准测试。该模式的
+响应包含 `usage.pcd`（forward passes、缓存状态、checkpoint 字节数与阶段耗时）。readout 请求通过
 `--readout-cache-entries`、`--readout-cache-bytes` 暴露有界前缀 checkpoint LRU，
 状态在 `usage.readout` 中。
 
@@ -258,6 +288,7 @@ python3 tests/test_anypii.py
 
 - 医疗与联系信息的精确输出；
 - NIST 正则快速路径（SSN、ITIN、EIN、支付卡、IBAN、IPv6、出生日期），零 decode；
+- readout 与 PCD 的 prefix-checkpoint 缓存命中；
 - `redact` 翻转；
 - 等长遮罩与 typed 遮罩；
 - auto redact；
@@ -274,6 +305,8 @@ ANYPPI_URL=http://127.0.0.1:8080 python3 tests/test_anypii.py
 ## 限制
 
 - 仅输出互不重叠的 spans；嵌套实体不会作为独立命中返回。
+- examples 使用真实姓名；`李四`、`李小明` 这类占位名会降低 0.8B 模型与
+  jieba 的边界/类型准确率。
 - 单请求最多支持 25 个类型，受选项标签数量限制。
 - 默认文本上限为 16000 code points，候选上限为 4000（可通过 `--max-text-cp`、
   `--max-candidates` 调整）；超出时返回 400。

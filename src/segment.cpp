@@ -68,6 +68,8 @@ bool weak_pos(const std::string & pos) {
         case 'e': // interjection
         case 'o': // onomatopoeia
         case 'z': // status
+        case 'l': // idiom
+        case 'i': // idiom/expression
         case 'w': // punctuation
             return true;
         default:

@@ -30,23 +30,41 @@ Build and serve:
 Redact a medical note with five request-defined types:
 
 ```sh
-curl http://127.0.0.1:8080/v1/anypii -H 'Content-Type: application/json' -d @examples/medical.json
+curl -s http://127.0.0.1:8080/v1/anypii \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "state": {
+      "text": "患者陈思远因肺炎入院。主治医师林婉清、责任护士周雅琴。予阿莫西林（商品名阿莫仙，辉瑞制药）抗感染。",
+      "policy": "打码患者姓名；不要打码医生与护士姓名；打码药厂名、药物品牌名与商品名；保留药品通用名。"
+    },
+    "types": {
+      "patient_name": {"description": "患者或患儿的姓名，不是医务人员。", "redact": true},
+      "clinician_name": {"description": "医生、护士、药师等医务人员姓名。", "redact": false},
+      "pharma_company": {"description": "药厂、制药企业名称。", "redact": true},
+      "drug_brand": {"description": "药品品牌名、商品名、商标名。", "redact": true},
+      "drug_generic": {"description": "药品通用名、成分名、INN。", "redact": false}
+    },
+    "threshold": 0.55,
+    "mask_style": "token"
+  }'
+
 ```
 
 ```json
 {
-  "redacted_text": "患者[REDACTED]因肺炎入院。主治医师王芳、责任护士赵敏。予阿莫西林（商品名[REDACTED]，[REDACTED]）抗感染。",
+  "redacted_text": "患者[REDACTED]因肺炎入院。主治医师林婉清、责任护士周雅琴。予阿莫西林（商品名[REDACTED]，[REDACTED]）抗感染。",
   "spans": [
-    {"type": "patient_name",   "text": "李小明",   "redacted": true,  "occurrences": [{"start": 2,  "end": 5,  "score": 0.965}]},
-    {"type": "clinician_name", "text": "王芳",     "redacted": false, "occurrences": [{"start": 15, "end": 17, "score": 0.933}]},
-    {"type": "clinician_name", "text": "赵敏",     "redacted": false, "occurrences": [{"start": 22, "end": 24, "score": 0.846}]},
-    {"type": "drug_generic",   "text": "阿莫西林", "redacted": false, "occurrences": [{"start": 26, "end": 30, "score": 0.968}]},
-    {"type": "drug_brand",     "text": "阿莫仙",   "redacted": true,  "occurrences": [{"start": 34, "end": 37, "score": 0.879}]},
-    {"type": "pharma_company", "text": "辉瑞制药", "redacted": true,  "occurrences": [{"start": 38, "end": 42, "score": 0.865}]}
+    {"type": "patient_name",   "text": "陈思远",         "redacted": true,  "occurrences": [{"start": 2,  "end": 5,  "score": 0.995}]},
+    {"type": "clinician_name", "text": "主治医师林婉清", "redacted": false, "occurrences": [{"start": 11, "end": 18, "score": 0.952}]},
+    {"type": "clinician_name", "text": "责任护士周雅琴", "redacted": false, "occurrences": [{"start": 19, "end": 26, "score": 0.633}]},
+    {"type": "drug_generic",   "text": "阿莫西林",       "redacted": false, "occurrences": [{"start": 28, "end": 32, "score": 0.962}]},
+    {"type": "drug_brand",     "text": "阿莫仙",         "redacted": true,  "occurrences": [{"start": 36, "end": 39, "score": 0.899}]},
+    {"type": "pharma_company", "text": "辉瑞制药",       "redacted": true,  "occurrences": [{"start": 40, "end": 44, "score": 0.798}]}
   ],
   "model": "qwen35 0.8B Q8_0",
   "backend": "qwen35 0.8B Q8_0 / llama.cpp CPU",
-  "usage": {"decodes": 4, "branches": 17, "generated_tokens": 0, "fallback": false}
+  "usage": {"decodes": 6, "branches": 20, "generated_tokens": 0, "fallback": false,
+            "readout": {"cache_status": "miss", "cache_entries": 1, "checkpoint_bytes": 23637148}}
 }
 ```
 
@@ -87,8 +105,8 @@ Everything is **prefill only** — there is no autoregressive loop and no
 3. **Boundary arbitration.** Overlapping candidates form components. The top
    candidate and the longest plausible variant are compared in both option
    orders; the winner is extended to a longer complete span when it is a proper
-   substring and the weight stays close. This resolves `患者李小明` /
-   `李小明` / `患者`.
+   substring and the weight stays close. This resolves `患者陈思远` /
+   `陈思远` / `患者`.
 4. **Type refinement.** Ambiguous spans get a pairwise type read. The shortlist
    is driven by the caller's own descriptions: exact digit lengths (`18位`,
    `16-19位`) and shared 2+ character substrings (`辉瑞制药` ↔
@@ -106,7 +124,7 @@ per-candidate in the sense of one forward per candidate.
 ```mermaid
 flowchart LR
     A["state.text + state.policy + types"] --> B["Candidate proposal<br/>tokenizer boundaries + adjacent-token merges<br/>+ regex exceptions"]
-    B --> C{"Language prefilter<br/>single chars, cue fragments,<br/>stop words, disease words"}
+    B --> C{"Prefilter<br/>single chars, caller type labels,<br/>punctuation boundaries, POS"}
     C -->|format/length fast path| D["Direct type decision<br/>0 model calls"]
     C -->|survives| E["Pass A: type readout<br/>shared evidence prefix<br/>one branch per unique candidate<br/>restricted softmax over type + none"]
     E --> F["Group overlapping candidates<br/>into components"]
@@ -152,6 +170,22 @@ boundary/type refinement and output for keep-only components, and consumes
 format-matched keep candidates (e.g. a ticket number) without emitting spans.
 If every type is keep, the request returns the original text with zero decodes.
 
+## Temperature and confidence
+
+`--temperature` scales the restricted logits before softmax. It affects the
+readout path and the readout prior used by PCD; PCD's own choice scoring uses
+raw logits. Practical starting points:
+
+- `0.85–0.95`: higher precision, fewer borderline keep spans, but can miss
+  ambiguous names or IDs.
+- `1.0`: default.
+- `1.1–1.3`: higher recall, but more false keep spans and occasional
+  over-extension.
+
+Pair it with `--none-margin` (keep types), `--none-margin-redact`
+(`redact:true` types), and the per-request `threshold`; re-run the examples or
+tests after changing any of them.
+
 ## Experimental PCD path
 
 Set `"mode": "pcd"` to use the Parallel Constrained Decoding backend adapted
@@ -162,11 +196,12 @@ checkpoints (`--pcd-cache-entries`, `--pcd-cache-bytes`). Its type stage
 uses the readout type pass as a confidence gate and prior, which suppresses
 over-eager assignments on non-entity spans.
 
-The default remains `"readout"`. In current tests PCD is faster on cache hits
-but less accurate on dynamic spans (it can over-extend a patient/drug mention),
-so it is intended for repeated identical schemas and benchmarking. Responses in
-this mode include `usage.pcd` with forward passes, cache status, checkpoint
-bytes, and phase timings. Readout requests expose a bounded prefix
+The default remains `"readout"`. PCD is fastest on cache hits and uses the
+readout type probabilities as a confidence gate and prior. With realistic names
+it matches readout on the medical/legal examples; placeholder names can still
+over-extend some label mentions. It is intended for repeated identical schemas
+and benchmarking. Responses in this mode include `usage.pcd` with forward
+passes, cache status, checkpoint bytes, and phase timings. Readout requests expose a bounded prefix
 checkpoint LRU (`--readout-cache-entries`, `--readout-cache-bytes`) through
 `usage.readout`.
 
@@ -288,6 +323,7 @@ The test script starts and stops its own server on a random port. It covers:
 
 - exact medical and contact outputs;
 - NIST regex fast path (SSN, ITIN, EIN, payment card, IBAN, IPv6, date of birth) with zero decodes;
+- readout and PCD prefix-checkpoint cache hits;
 - `redact` flip;
 - equal-length and typed masking;
 - auto redaction;
@@ -304,6 +340,8 @@ ANYPPI_URL=http://127.0.0.1:8080 python3 tests/test_anypii.py
 ## Limits
 
 - Non-overlapping spans only; nested entities are not returned as separate hits.
+- Examples use realistic names; placeholder names such as 李四 or 李小明 can
+  lower boundary/type accuracy for the 0.8B model and jieba.
 - At most 25 types per request (option-label budget).
 - Text limit 16000 code points and candidate limit 4000 by default
   (`--max-text-cp`, `--max-candidates`); longer input returns 400.
