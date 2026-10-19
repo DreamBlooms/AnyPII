@@ -13,6 +13,8 @@ struct ServerOptions {
     int max_branches = 32;
     int max_text_cp = 16000;
     int max_candidates = 4000;
+    double temperature = 1.0;
+    double none_margin = 0.65;
 };
 
 void run_server(Engine & engine, const ServerOptions & options);

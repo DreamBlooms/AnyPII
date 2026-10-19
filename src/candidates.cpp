@@ -1,5 +1,7 @@
 #include "anypii/candidates.hpp"
 
+#include "anypii/nist.hpp"
+
 #include <algorithm>
 #include <map>
 #include <regex>
@@ -199,34 +201,23 @@ std::vector<Candidate> propose_candidates(const Utf8Text & text, Engine & engine
         if (e - s >= 8) add(s, e, 1.25, true);
     }
 
-    // Generic surface patterns. These only propose spans; the model still decides
-    // whether a span is PII and of which type.
-    struct Pattern {
-        const char * re;
-        double prior;
-    };
-    const Pattern patterns[] = {
-        {"[A-Za-z0-9._%+\\-]+@[A-Za-z0-9.\\-]+\\.[A-Za-z]{2,}", 1.30},
-        {"https?://[A-Za-z0-9._~:/?#\\[\\]@!$&'()*+,;=%-]+", 1.30},
-        {"(?:\\+?86[- ]?)?1[3-9][0-9]{9}", 1.30},
-        {"[0-9]{5,19}", 1.20},
-        {"[A-Za-z]{1,6}[-_][A-Za-z0-9]{2,}(?:[-_][A-Za-z0-9]+)*", 1.25},
-        {"\\+?[0-9][0-9 ()\\-]{7,}[0-9]", 1.25},
-        {"(?:[0-9]{1,3}\\.){3}[0-9]{1,3}", 1.25},
-        {"(?:sk|pk|api|key)[-_][A-Za-z0-9_-]{12,}", 1.30},
-        {"[A-Za-z0-9_-]{24,}", 1.10},
-        {"[(（][0-9]{4}[)）][^\\s，。；,;]{2,}", 1.25},
-    };
+    // Generic structural patterns from the NIST-oriented PII format set.
+    static const std::vector<std::pair<std::regex, double>> compiled = [] {
+        std::vector<std::pair<std::regex, double>> out;
+        for (const auto & pat : pii_patterns()) {
+            out.emplace_back(std::regex(pat.regex, std::regex::optimize), pat.prior);
+        }
+        return out;
+    }();
 
-    for (const auto & pat : patterns) {
-        std::regex re(pat.re, std::regex::optimize);
+    for (const auto & [re, prior] : compiled) {
         for (std::sregex_iterator it(text.bytes.begin(), text.bytes.end(), re), end;
              it != end; ++it) {
             const size_t b = (size_t) it->position();
             const size_t e = b + (size_t) it->length();
             const int start = byte_to_cp(text, b);
             const int stop = byte_to_cp(text, e);
-            add(start, stop, pat.prior, true);
+            add(start, stop, prior, true);
         }
     }
 

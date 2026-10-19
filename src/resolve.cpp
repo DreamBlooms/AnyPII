@@ -7,11 +7,13 @@
 #include <set>
 #include <stdexcept>
 #include <tuple>
+#include <unordered_set>
 #include <string>
 #include <regex>
 
 #include "anypii/candidates.hpp"
 #include "anypii/mask.hpp"
+#include "anypii/nist.hpp"
 #include "anypii/prompt.hpp"
 #include "anypii/unicode.hpp"
 
@@ -26,6 +28,7 @@ struct CandScore {
     int second = -1;
     double secondp = 0.0;
     double exactp = 0.0;
+    double none_p = 0.0;
 };
 
 struct Component {
@@ -33,19 +36,6 @@ struct Component {
     int start = 0;
     int end = 0;
 };
-
-struct Pending {
-    Component comp;
-    std::vector<BoundaryOption> options;
-};
-
-int argmax(const std::vector<double> & v) {
-    int best = 0;
-    for (size_t i = 1; i < v.size(); ++i) {
-        if (v[i] > v[best]) best = (int) i;
-    }
-    return best;
-}
 
 std::string pair_signature(const PairChoice & pc) {
     std::string s = pc.criterion;
@@ -115,24 +105,6 @@ std::string clean_line(const std::string & s) {
     return out;
 }
 
-const std::vector<std::u32string> & cue_words() {
-    static const std::vector<std::u32string> cues = {
-        U"患者", U"患儿", U"医师", U"医生", U"护士", U"主任", U"主治",
-        U"责任", U"商品名", U"通用名", U"姓名",
-        U"入院", U"出院", U"治疗", U"检查", U"手术", U"抗", U"予",
-        U"服用", U"口服", U"注射", U"静脉", U"手机", U"电话", U"邮箱",
-        U"邮件", U"工单", U"联系人", U"联系", U"号码", U"编号", U"受理",
-        U"已受理", U"处理", U"完成", U"状态", U"备注", U"员工", U"工号",
-        U"身份证", U"身份证号", U"银行卡", U"卡号", U"原告", U"被告",
-        U"案号", U"服务器", U"地址", U"保留", U"API", U"api", U"key",
-        U"Key", U"查房", U"调整", U"方案", U"继续", U"复查", U"提示",
-        U"下降", U"减轻", U"好转", U"缓解", U"记录", U"建议", U"同意",
-        U"嘱", U"发放", U"随访", U"复诊", U"门诊", U"指标", U"正常",
-        U"稳定", U"恢复", U"用药", U"停用", U"次日", U"第二日",
-        U"第三日", U"第五日", U"第七日"};
-    return cues;
-}
-
 std::string context_of(const Utf8Text & text, int start, int end, int radius = 20) {
     const int left = std::max(0, start - radius);
     const int right = std::min(text.size(), end + radius);
@@ -156,84 +128,67 @@ int longest_common_substring(const std::u32string & a, const std::u32string & b)
     return best;
 }
 
-enum class Format { None, Email, Phone, Url, Ticket, Digits, Ip, ApiKey, CaseNumber };
+std::string ascii_lower_copy(const std::string & s) {
+    std::string out = s;
+    for (char & c : out) c = (char) std::tolower((unsigned char) c);
+    return out;
+}
 
-Format detect_format(const std::string & s) {
-    static const std::regex email(R"([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})");
-    static const std::regex cnmobile(R"((?:\+?86[- ]?)?1[3-9][0-9]{9})");
-    static const std::regex intlphone(R"(\+?[0-9][0-9 ()\-]{7,}[0-9])");
-    static const std::regex url(R"(https?://[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+)");
-    static const std::regex ticket(R"([A-Za-z]{1,6}[-_][A-Za-z0-9]{2,}(?:[-_][A-Za-z0-9]+)*)");
-    static const std::regex ipv4(R"((?:[0-9]{1,3}\.){3}[0-9]{1,3})");
-    static const std::regex apikey(R"((?:sk|pk|api|key)[-_][A-Za-z0-9_-]{12,})");
-    static const std::regex caseno(R"([(（][0-9]{4}[)）][^\s，。；,;]{2,})");
-    static const std::regex digits(R"([0-9]{5,19})");
-    {
-        const Utf8Text t = decode_utf8(s);
-        if (t.size() >= 8 && (t.cps[0] == U'(' || t.cps[0] == (char32_t) 0xFF08)) {
-            bool four = true;
-            for (int k = 1; k <= 4; ++k) {
-                if (t.cps[(size_t) k] < '0' || t.cps[(size_t) k] > '9') { four = false; break; }
+// A candidate that matches the caller's own type vocabulary is a label, not
+// the entity itself. Two generic signals are used: whole words/acronyms of the
+// id/description (e.g. "SSN", "DOB") and any 2..6 code-point substring of the
+// id/description (e.g. "手机" inside "联系人手机"). No fixed word list.
+bool is_type_label(const Utf8Text & text, const std::vector<TypeDef> & types,
+                   const std::unordered_set<std::u32string> & ngrams) {
+    if (text.size() < 2) return false;
+    const std::string needle = ascii_lower_copy(text.bytes);
+    for (const auto & def : types) {
+        for (const std::string & field : {def.id, def.description}) {
+            std::string acronym;
+            size_t start = 0;
+            while (start < field.size()) {
+                while (start < field.size() &&
+                       !std::isalnum((unsigned char) field[start])) {
+                    ++start;
+                }
+                size_t end = start;
+                while (end < field.size() &&
+                       std::isalnum((unsigned char) field[end])) {
+                    ++end;
+                }
+                if (end == start) break;
+                const std::string word = ascii_lower_copy(field.substr(start, end - start));
+                if (word == needle) return true;
+                acronym.push_back(word.front());
+                start = end;
             }
-            if (four && (t.cps[5] == U')' || t.cps[5] == (char32_t) 0xFF09)) {
-                return Format::CaseNumber;
+            if (acronym.size() >= 2 && acronym == needle) return true;
+        }
+    }
+    const int max_len = std::min(6, text.size());
+    for (int len = 2; len <= max_len; ++len) {
+        for (int start = 0; start + len <= text.size(); ++start) {
+            if (ngrams.count(text.cps.substr((size_t) start, (size_t) len))) return true;
+        }
+    }
+    return false;
+}
+
+std::unordered_set<std::u32string> build_type_label_ngrams(
+        const std::vector<TypeDef> & types) {
+    std::unordered_set<std::u32string> out;
+    for (const auto & def : types) {
+        for (const std::string & field : {def.id, def.description}) {
+            const Utf8Text t = decode_utf8(field);
+            const int max_len = std::min(6, t.size());
+            for (int len = 2; len <= max_len; ++len) {
+                for (int start = 0; start + len <= t.size(); ++start) {
+                    out.insert(t.cps.substr((size_t) start, (size_t) len));
+                }
             }
         }
     }
-    if (std::regex_match(s, email)) return Format::Email;
-    if (std::regex_match(s, url)) return Format::Url;
-    if (std::regex_match(s, apikey)) return Format::ApiKey;
-    if (std::regex_match(s, ipv4)) return Format::Ip;
-    if (std::regex_match(s, caseno)) return Format::CaseNumber;
-    if (std::regex_match(s, cnmobile)) return Format::Phone;
-    if (std::regex_match(s, intlphone) &&
-        (s.find('+') != std::string::npos || s.find(' ') != std::string::npos ||
-         s.find('-') != std::string::npos || s.find('(') != std::string::npos)) {
-        return Format::Phone;
-    }
-    if (std::regex_match(s, ticket)) return Format::Ticket;
-    if (std::regex_match(s, digits)) return Format::Digits;
-    return Format::None;
-}
-
-double format_type_bonus(Format f, const TypeDef & t) {
-    if (f == Format::None) return 1.0;
-    std::string hay = t.id + " " + t.description;
-    for (char & c : hay) c = (char) std::tolower((unsigned char) c);
-    auto has = [&](const char * s) { return hay.find(s) != std::string::npos; };
-    switch (f) {
-        case Format::Email:
-            if (has("邮箱") || has("邮件") || has("email") || has("e-mail")) return 6.0;
-            break;
-        case Format::Phone:
-            if (has("电话") || has("手机") || has("phone") || has("tel") || has("contact"))
-                return 6.0;
-            break;
-        case Format::Url:
-            if (has("网址") || has("链接") || has("url") || has("website") || has("link"))
-                return 6.0;
-            break;
-        case Format::Ticket:
-            if (has("工单") || has("票据") || has("ticket") || has("order")) return 6.0;
-            break;
-        case Format::Digits:
-            if (has("身份证") || has("证件") || has("银行卡") || has("卡号") || has("账号"))
-                return 6.0;
-            break;
-        case Format::Ip:
-            if (has("ip") || has("网络地址") || has("主机")) return 6.0;
-            break;
-        case Format::ApiKey:
-            if (has("api") || has("key") || has("密钥") || has("token") ||
-                has("secret") || has("令牌") || has("凭证"))
-                return 6.0;
-            break;
-        case Format::CaseNumber:
-            if (has("案号") || has("案件") || has("case")) return 6.0;
-            break;
-        default: break;
-    }
-    return 1.0;
+    return out;
 }
 
 double length_type_bonus(int len, const TypeDef & t) {
@@ -258,166 +213,24 @@ double lexical_type_bonus(const Utf8Text & span, const TypeDef & t) {
     return 1.0;
 }
 
-bool is_english_stop_phrase(const std::string & s) {
-    static const std::set<std::string> stop = {
-        "email", "e-mail", "phone", "tel", "telephone", "order", "contact",
-        "address", "name", "should", "stay", "works", "work", "at", "the",
-        "a", "an", "and", "or", "of", "to", "in", "on", "for", "with",
-        "is", "are", "was", "were", "be", "by", "as", "from", "this", "that"};
-    std::string word;
-    for (size_t i = 0; i <= s.size(); ++i) {
-        const char c = i < s.size() ? s[i] : ' ';
-        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')) {
-            word.push_back((char) std::tolower((unsigned char) c));
-        } else {
-            if (!word.empty() && stop.count(word)) return true;
-            word.clear();
-        }
-    }
-    return false;
-}
-
-double boundary_factor(const std::string & span) {
-    const Utf8Text t = decode_utf8(span);
-    if (t.size() == 0) return 1.0;
-    static const std::set<char32_t> func = {
-        U'的', U'了', U'在', U'因', U'予', U'与', U'和', U'及', U'等',
-        U'对', U'将', U'为', U'并', U'且', U'或', U'把', U'被', U'给'};
-    const auto & cues = cue_words();
-
-    auto starts_with = [&](const std::u32string & p) {
-        if (t.cps.size() < p.size()) return false;
-        for (size_t i = 0; i < p.size(); ++i) {
-            if (t.cps[i] != p[i]) return false;
-        }
-        return true;
-    };
-    auto ends_with = [&](const std::u32string & p) {
-        if (t.cps.size() < p.size()) return false;
-        const size_t off = t.cps.size() - p.size();
-        for (size_t i = 0; i < p.size(); ++i) {
-            if (t.cps[off + i] != p[i]) return false;
-        }
-        return true;
-    };
-
-    double f = 1.0;
-    if (func.count(t.cps.front())) f *= 0.60;
-    if (func.count(t.cps.back())) f *= 0.60;
-    for (size_t i = 1; i + 1 < t.cps.size(); ++i) {
-        if (func.count(t.cps[i])) f *= 0.50;
-    }
-    for (const auto & cue : cues) {
-        if (starts_with(cue)) f *= 0.50;
-        if (ends_with(cue)) f *= 0.70;
-        if (cue.size() >= 2) {
-            size_t pos = 0;
-            while ((pos = t.cps.find(cue, pos)) != std::u32string::npos) {
-                if (pos != 0 && pos + cue.size() != t.cps.size()) f *= 0.50;
-                ++pos;
-            }
-        }
-    }
-    return std::max(0.2, f);
-}
-
 double length_factor(int len) {
     if (len <= 1) return 0.80;
     return std::min(1.50, 1.0 + 0.10 * (len - 2));
 }
 
-std::vector<BoundaryOption> build_options(const Component & comp,
-                                          const std::vector<Candidate> & candidates,
-                                          const std::vector<CandScore> & scores,
-                                          const TypeTable & table,
-                                          int max_options) {
-    std::map<std::tuple<int, int, std::string>, BoundaryOption> uniq;
-    for (int m : comp.members) {
-        const auto & cs = scores[(size_t) m];
-        if (cs.best < 0) continue;
-        BoundaryOption o;
-        o.start = candidates[(size_t) m].start;
-        o.end = candidates[(size_t) m].end;
-        o.text = candidates[(size_t) m].text;
-        o.type = table.types[(size_t) cs.best].id;
-        o.weight = cs.bestp * candidates[(size_t) m].prior * boundary_factor(o.text) * length_factor(o.end - o.start);
-        auto key = std::make_tuple(o.start, o.end, o.type);
-        auto it = uniq.find(key);
-        if (it == uniq.end() || it->second.weight < o.weight) uniq[key] = o;
-
-        if (cs.second >= 0 && cs.secondp >= 0.08) {
-            BoundaryOption o2 = o;
-            o2.type = table.types[(size_t) cs.second].id;
-            o2.weight = cs.secondp * candidates[(size_t) m].prior * boundary_factor(o2.text) * length_factor(o2.end - o2.start);
-            auto key2 = std::make_tuple(o2.start, o2.end, o2.type);
-            auto it2 = uniq.find(key2);
-            if (it2 == uniq.end() || it2->second.weight < o2.weight) uniq[key2] = o2;
-        }
+double boundary_factor(const std::string & span) {
+    const Utf8Text t = decode_utf8(span);
+    if (t.size() == 0) return 1.0;
+    double f = 1.0;
+    if (is_punct_cp(t.cps.front()) || is_space_cp(t.cps.front())) f *= 0.60;
+    if (is_punct_cp(t.cps.back()) || is_space_cp(t.cps.back())) f *= 0.60;
+    for (size_t i = 1; i + 1 < t.cps.size(); ++i) {
+        if (is_punct_cp(t.cps[i]) || is_space_cp(t.cps[i])) f *= 0.70;
     }
-
-    std::vector<BoundaryOption> list;
-    list.reserve(uniq.size());
-    for (auto & [key, o] : uniq) list.push_back(o);
-    std::sort(list.begin(), list.end(),
-              [](const BoundaryOption & a, const BoundaryOption & b) {
-                  return a.weight > b.weight;
-              });
-
-    const size_t cap = (size_t) std::max(1, max_options);
-    if (list.size() > cap) {
-        // Keep the strongest options, then make sure each type's longest
-        // variant survives so under-split spans are still available.
-        std::vector<BoundaryOption> trimmed(list.begin(), list.begin() + (long) cap);
-        std::set<std::string> present;
-        for (const auto & o : trimmed) present.insert(o.type);
-        std::vector<BoundaryOption> extra;
-        for (const auto & o : list) {
-            if (!present.count(o.type)) extra.push_back(o);
-        }
-        std::sort(extra.begin(), extra.end(),
-                  [](const BoundaryOption & a, const BoundaryOption & b) {
-                      if ((a.end - a.start) != (b.end - b.start))
-                          return (a.end - a.start) > (b.end - b.start);
-                      return a.weight > b.weight;
-                  });
-        for (const auto & o : extra) {
-            if (trimmed.size() >= cap) break;
-            trimmed.push_back(o);
-            present.insert(o.type);
-        }
-        list.swap(trimmed);
-    }
-    return list;
+    return std::max(0.2, f);
 }
 
 } // namespace
-
-bool is_disease_word(const std::string & text) {
-    static const std::vector<std::string> words = {
-        "肺炎", "感染", "发热", "咳嗽", "糖尿病", "高血压", "肿瘤", "癌症",
-        "症状", "疼痛", "炎症", "感冒", "哮喘"};
-    for (const auto & w : words) {
-        if (text == w) return true;
-    }
-    return false;
-}
-
-bool request_covers_disease(const AnyPiiRequest & request) {
-    static const std::vector<std::string> markers = {
-        "疾病", "症状", "病名", "诊断", "病症"};
-    for (const auto & t : request.types) {
-        for (const auto & m : markers) {
-            if (t.id.find(m) != std::string::npos ||
-                t.description.find(m) != std::string::npos) {
-                return true;
-            }
-        }
-        for (const auto & w : {"肺炎", "感染", "发热", "咳嗽"}) {
-            if (t.description.find(w) != std::string::npos) return true;
-        }
-    }
-    return false;
-}
 
 AnyPiiResult run_pipeline(Engine & engine, const AnyPiiRequest & request,
                           const ResolveOptions & options) {
@@ -473,38 +286,14 @@ AnyPiiResult run_pipeline(Engine & engine, const AnyPiiRequest & request,
     std::vector<std::pair<int, int>> consumed;
     std::vector<Candidate> candidates;
     candidates.reserve(proposed.size());
-    const bool disease_types = request_covers_disease(request);
     const bool skip_keep = request.skip_keep_types;
+    const auto type_label_ngrams = build_type_label_ngrams(request.types);
 
-    // Type-aware non-entity stoplist. A word is filtered only when no requested
-    // type description mentions it, so a symptom/test/pharmacy type can still
-    // opt in by naming the vocabulary it cares about.
-    static const std::vector<std::string> extra_stop_words = {
-        "胸片", "炎症", "吸收", "生命体征", "生命", "体征", "咳嗽", "明显",
-        "三日", "再次", "确认", "各项", "药房", "评估", "发热"};
-    std::vector<std::string> active_stop_words;
-    for (const auto & w : extra_stop_words) {
-        bool relevant = false;
-        for (const auto & t : request.types) {
-            if (t.id.find(w) != std::string::npos ||
-                t.description.find(w) != std::string::npos) {
-                relevant = true;
-                break;
-            }
-        }
-        if (!relevant) active_stop_words.push_back(w);
-    }
     for (const auto & c : proposed) {
         if (!c.regex_hit) {
             if (c.end - c.start <= 1) continue;
+            if (is_type_label(decode_utf8(c.text), request.types, type_label_ngrams)) continue;
             if (boundary_factor(c.text) < 0.75) continue;
-            if (!disease_types && is_disease_word(c.text)) continue;
-            if (is_english_stop_phrase(c.text)) continue;
-            bool stop_hit = false;
-            for (const auto & w : active_stop_words) {
-                if (c.text.find(w) != std::string::npos) { stop_hit = true; break; }
-            }
-            if (stop_hit) continue;
         }
         bool already_consumed = false;
         for (const auto & r : consumed) {
@@ -514,23 +303,25 @@ AnyPiiResult run_pipeline(Engine & engine, const AnyPiiRequest & request,
 
         bool handled = false;
         if (c.regex_hit) {
-            const Format fmt = detect_format(c.text);
+            const PiiFormat fmt = detect_format(c.text);
             std::vector<int> ftypes;
             for (int t = 0; t < type_count; ++t) {
-                if (format_type_bonus(fmt, table.types[(size_t) t]) > 1.0) {
+                if (type_matches_format(fmt, table.types[(size_t) t])) {
                     ftypes.push_back(t);
                 }
             }
             std::vector<int> len_types;
-            const int cp_len = c.end - c.start;
-            for (int t = 0; t < type_count; ++t) {
-                if (length_type_bonus(cp_len, table.types[(size_t) t]) > 1.0) {
-                    len_types.push_back(t);
+            if (is_ascii_digits(c.text)) {
+                const int cp_len = c.end - c.start;
+                for (int t = 0; t < type_count; ++t) {
+                    if (length_type_bonus(cp_len, table.types[(size_t) t]) > 1.0) {
+                        len_types.push_back(t);
+                    }
                 }
             }
             int forced = -1;
             if (ftypes.size() == 1) forced = ftypes[0];
-            else if (fmt == Format::Digits && len_types.size() == 1) forced = len_types[0];
+            else if (ftypes.empty() && len_types.size() == 1) forced = len_types[0];
             if (forced >= 0) {
                 if (skip_keep && table.types[(size_t) forced].redact == RedactMode::Keep) {
                     consumed.push_back({c.start, c.end});
@@ -547,29 +338,6 @@ AnyPiiResult run_pipeline(Engine & engine, const AnyPiiRequest & request,
             }
         }
         if (!handled) candidates.push_back(c);
-    }
-    // Drop spans that only partially overlap a role/category/action cue.
-    {
-        std::vector<Candidate> clean;
-        clean.reserve(candidates.size());
-        const auto & cues = cue_words();
-        for (const auto & c : candidates) {
-            bool partial_cue = false;
-            for (const auto & cue : cues) {
-                size_t pos = 0;
-                while ((pos = text.cps.find(cue, pos)) != std::u32string::npos) {
-                    const int cs = (int) pos;
-                    const int ce = (int) pos + (int) cue.size();
-                    const bool overlaps = c.start < ce && cs < c.end;
-                    const bool contains_cue = c.start <= cs && c.end >= ce;
-                    if (overlaps && !contains_cue) { partial_cue = true; break; }
-                    ++pos;
-                }
-                if (partial_cue) break;
-            }
-            if (!partial_cue) clean.push_back(c);
-        }
-        candidates.swap(clean);
     }
     if (!consumed.empty()) {
         std::vector<PhraseHit> filtered_hits;
@@ -656,18 +424,17 @@ AnyPiiResult run_pipeline(Engine & engine, const AnyPiiRequest & request,
 
         BranchSet set = build_type_branches(engine, table, request, text, pass_a);
         const auto probs = engine.decode_branches(set.prefix, set.branches,
-                                                  options.max_branches_per_decode);
+                                                  options.max_branches_per_decode,
+                                                  options.temperature);
         account_branches(out, set.branches.size(), options.max_branches_per_decode);
 
         std::vector<CandScore> unique_scores(pass_a.size());
         for (size_t u = 0; u < pass_a.size(); ++u) {
             const auto & cand = pass_a[u];
             std::vector<double> p = probs[u];
-            const Format fmt = detect_format(cand.text);
             const Utf8Text span_text = decode_utf8(cand.text);
             double norm = 0.0;
             for (int t = 0; t < type_count; ++t) {
-                p[(size_t) t] *= format_type_bonus(fmt, table.types[(size_t) t]);
                 p[(size_t) t] *= lexical_type_bonus(span_text, table.types[(size_t) t]);
                 p[(size_t) t] *= length_type_bonus(cand.end - cand.start,
                                                    table.types[(size_t) t]);
@@ -690,11 +457,21 @@ AnyPiiResult run_pipeline(Engine & engine, const AnyPiiRequest & request,
                     cs.secondp = p[(size_t) t];
                 }
             }
-            cs.keep = cs.best >= 0 && cs.bestp >= request.threshold;
+            cs.none_p = p[(size_t) type_count];
+            if (cs.best < 0 || cs.none_p >= cs.bestp ||
+                cs.bestp - cs.none_p < options.none_margin) {
+                cs.best = -1;
+                cs.second = -1;
+                cs.secondp = 0.0;
+                cs.bestp = cs.none_p;
+                cs.keep = false;
+            } else {
+                cs.keep = cs.bestp >= request.threshold;
+            }
             if (std::getenv("ANYPPI_DEBUG")) {
                 std::cerr << "[A] [" << cand.text << "] "
                           << (cs.best >= 0 ? table.types[(size_t) cs.best].id : "?")
-                          << "=" << cs.bestp;
+                          << "=" << cs.bestp << " none=" << cs.none_p;
                 if (cs.second >= 0) {
                     std::cerr << " 2nd=" << table.types[(size_t) cs.second].id
                               << "=" << cs.secondp;
@@ -751,8 +528,9 @@ AnyPiiResult run_pipeline(Engine & engine, const AnyPiiRequest & request,
         for (int m : comp.members) {
             const auto & cs = scores[(size_t) m];
             if (cs.best < 0) continue;
+            const int len = candidates[(size_t) m].end - candidates[(size_t) m].start;
             double w = cs.bestp * candidates[(size_t) m].prior *
-                       boundary_factor(candidates[(size_t) m].text);
+                       boundary_factor(candidates[(size_t) m].text) * length_factor(len);
             if (candidates[(size_t) m].regex_hit) w *= 4.0;
             if (candidates[(size_t) m].end - candidates[(size_t) m].start <= 1) w *= 0.5;
             auto key = std::make_pair(candidates[(size_t) m].start,
@@ -841,7 +619,8 @@ AnyPiiResult run_pipeline(Engine & engine, const AnyPiiRequest & request,
     if (!pairs.empty()) {
         BranchSet set = build_pair_branches(engine, request, pairs);
         const auto probs = engine.decode_branches(set.prefix, set.branches,
-                                                  options.max_branches_per_decode);
+                                                  options.max_branches_per_decode,
+                                                  options.temperature);
         account_branches(out, set.branches.size(), options.max_branches_per_decode);
         for (size_t k = 0; k < pair_meta.size(); ++k) {
             const int pi = pair_meta[k].pair_index;
@@ -946,53 +725,24 @@ AnyPiiResult run_pipeline(Engine & engine, const AnyPiiRequest & request,
     };
 
     // Skip the pairwise type pass when the answer is already determined by the
-    // model margin or by a request-driven format/description prior.
+    // model margin or by a caller-description overlap.
     for (int si = 0; si < (int) selected.size(); ++si) {
         const auto & cs = scores[(size_t) selected[(size_t) si].cand];
         const Utf8Text span_text = decode_utf8(selected[(size_t) si].text);
-        const Format fmt = detect_format(selected[(size_t) si].text);
 
-        int fmt_t = -1;
-        int fmt_count = 0;
-        std::vector<int> fmt_types;
+        int ov_max = type_overlap(span_text, cs.best);
+        int ov_t = -1;
         for (int t = 0; t < type_count; ++t) {
-            if (format_type_bonus(fmt, table.types[(size_t) t]) > 1.0) {
-                fmt_t = t;
-                ++fmt_count;
-                fmt_types.push_back(t);
+            if (t == cs.best) continue;
+            const int ov = type_overlap(span_text, t);
+            if (ov >= 2 && ov > ov_max) {
+                ov_max = ov;
+                ov_t = t;
             }
         }
-        if (std::getenv("ANYPPI_DEBUG")) {
-            std::cerr << "[S] [" << selected[(size_t) si].text << "] fmt=" << (int) fmt
-                      << " fmt_count=" << fmt_count << " best="
-                      << table.types[(size_t) cs.best].id << " p=" << cs.bestp << "\n";
-        }
-        if (fmt_count == 1) {
-            direct_hit(si, fmt_t);
+        if (ov_t >= 0) {
+            direct_hit(si, ov_t);
             continue;
-        }
-        if (fmt_count >= 2 &&
-            std::find(fmt_types.begin(), fmt_types.end(), cs.best) == fmt_types.end()) {
-            pair_selected.push_back(si);
-            continue;
-        }
-
-        if (fmt_count == 0) {
-            int best_ov = type_overlap(span_text, cs.best);
-            int ov_t = -1;
-            int ov_max = best_ov;
-            for (int t = 0; t < type_count; ++t) {
-                if (t == cs.best) continue;
-                const int ov = type_overlap(span_text, t);
-                if (ov >= 2 && ov > ov_max) {
-                    ov_max = ov;
-                    ov_t = t;
-                }
-            }
-            if (ov_t >= 0) {
-                direct_hit(si, ov_t);
-                continue;
-            }
         }
 
         if (cs.bestp >= 0.80 && cs.bestp - cs.secondp >= 0.30) {
@@ -1011,30 +761,10 @@ AnyPiiResult run_pipeline(Engine & engine, const AnyPiiRequest & request,
             cand_types.push_back(t);
         };
         const Utf8Text span_text = decode_utf8(selected[(size_t) si].text);
-        const Format fmt = detect_format(selected[(size_t) si].text);
-
-        std::vector<int> fmt_types;
-        for (int t = 0; t < type_count; ++t) {
-            if (format_type_bonus(fmt, table.types[(size_t) t]) > 1.0) fmt_types.push_back(t);
-        }
-
-        if (fmt_types.size() >= 2) {
-            // A structured format with multiple plausible types (e.g. an
-            // 18/19-digit number with ID and bank-card types): only let the
-            // model choose among the format-consistent types.
-            for (int t : fmt_types) add_type(t);
-            for (int t = 0; t < type_count && (int) cand_types.size() < 5; ++t) {
-                if (lexical_type_bonus(span_text, table.types[(size_t) t]) > 1.0) add_type(t);
-            }
-        } else {
-            add_type(cs.best);
-            if (cs.second >= 0 && cs.secondp >= 0.05) add_type(cs.second);
-            for (int t = 0; t < type_count && (int) cand_types.size() < 5; ++t) {
-                if (format_type_bonus(fmt, table.types[(size_t) t]) > 1.0 ||
-                    lexical_type_bonus(span_text, table.types[(size_t) t]) > 1.0) {
-                    add_type(t);
-                }
-            }
+        add_type(cs.best);
+        if (cs.second >= 0 && cs.secondp >= 0.05) add_type(cs.second);
+        for (int t = 0; t < type_count && (int) cand_types.size() < 5; ++t) {
+            if (lexical_type_bonus(span_text, table.types[(size_t) t]) > 1.0) add_type(t);
         }
 
         PairChoice pc;
@@ -1069,7 +799,8 @@ AnyPiiResult run_pipeline(Engine & engine, const AnyPiiRequest & request,
     {
         BranchSet set = build_pair_branches(engine, request, type_pairs);
         const auto probs = engine.decode_branches(set.prefix, set.branches,
-                                                  options.max_branches_per_decode);
+                                                  options.max_branches_per_decode,
+                                                  options.temperature);
         account_branches(out, set.branches.size(), options.max_branches_per_decode);
 
         for (size_t k = 0; k < type_meta.size(); ++k) {
@@ -1083,14 +814,12 @@ AnyPiiResult run_pipeline(Engine & engine, const AnyPiiRequest & request,
             const std::vector<int> & ts = type_meta[k].types;
             int pick = 0;
             double best = -1.0;
-            const Format fmt = detect_format(selected[(size_t) si].text);
             const Utf8Text span_text = decode_utf8(selected[(size_t) si].text);
             std::vector<double> vals(n, 0.0);
             double vsum = 0.0;
             for (size_t j = 0; j < n; ++j) {
                 double v = 0.5 * (pf[j] + pr[n - 1 - j]);
                 if (j < ts.size() && ts[j] >= 0) {
-                    v *= format_type_bonus(fmt, table.types[(size_t) ts[j]]);
                     v *= lexical_type_bonus(span_text, table.types[(size_t) ts[j]]);
                     v *= length_type_bonus(
                         (int) span_text.size(), table.types[(size_t) ts[j]]);
@@ -1107,33 +836,7 @@ AnyPiiResult run_pipeline(Engine & engine, const AnyPiiRequest & request,
             int chosen = -1;
             if (pick < (int) ts.size()) chosen = ts[(size_t) pick];
 
-            // A regex format is a strong request-driven signal: if exactly one
-            // requested type mentions this format (phone/email/url/ticket), use it.
-            std::vector<int> fmt_types;
-            for (int t = 0; t < type_count; ++t) {
-                if (format_type_bonus(fmt, table.types[(size_t) t]) > 1.0) {
-                    fmt_types.push_back(t);
-                }
-            }
-            int forced = -1;
-            if (fmt_types.size() == 1) {
-                forced = fmt_types[0];
-            } else if (fmt_types.size() > 1) {
-                double fb = -1.0;
-                for (int t : fmt_types) {
-                    for (size_t j = 0; j < ts.size(); ++j) {
-                        if (ts[j] == t && vals[j] > fb) { fb = vals[j]; forced = t; }
-                    }
-                }
-            }
-            if (forced >= 0) {
-                chosen = forced;
-                for (size_t j = 0; j < ts.size(); ++j) {
-                    if (ts[j] == forced) { best = vals[j]; break; }
-                }
-            }
-
-            if (chosen >= 0 && forced < 0) {
+            if (chosen >= 0) {
                 const Utf8Text span_text = decode_utf8(selected[(size_t) si].text);
                 int best_overlap = 0;
                 for (int t = 0; t < type_count; ++t) {
@@ -1232,7 +935,8 @@ finalize:
     if (!auto_items.empty()) {
         BranchSet set = build_redact_branches(engine, table, request, auto_items);
         const auto probs = engine.decode_branches(set.prefix, set.branches,
-                                                  options.max_branches_per_decode);
+                                                  options.max_branches_per_decode,
+                                                  options.temperature);
         account_branches(out, set.branches.size(), options.max_branches_per_decode);
         for (size_t i = 0; i < auto_items.size() && 2 * i + 1 < probs.size(); ++i) {
             const auto & pf = probs[2 * i];

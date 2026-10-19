@@ -65,27 +65,6 @@ std::string type_legend(const TypeTable & table) {
     return os.str();
 }
 
-std::string inline_options(const TypeTable & table) {
-    std::ostringstream os;
-    for (size_t i = 0; i < table.types.size(); ++i) {
-        if (i) os << " ";
-        os << table.codes[i] << "=" << table.types[i].id;
-    }
-    os << " " << table.none_code << "=none";
-    return os.str();
-}
-
-std::string compact_legend(const TypeTable & table) {
-    std::ostringstream os;
-    os << "类型代码：";
-    for (size_t i = 0; i < table.types.size(); ++i) {
-        if (i) os << "；";
-        os << table.codes[i] << "=" << table.types[i].id;
-    }
-    os << "；" << table.none_code << "=none\n";
-    return os.str();
-}
-
 std::string common_system(const TypeTable & table, const AnyPiiRequest & request,
                           const std::string & task_rules) {
     std::ostringstream os;

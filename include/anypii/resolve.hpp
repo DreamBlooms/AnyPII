@@ -15,6 +15,8 @@ struct ResolveOptions {
     double direct_margin = 0.20;
     double exact_threshold = 0.50;
     double verify_threshold = 0.50;
+    double temperature = 1.0;
+    double none_margin = 0.65;
 };
 
 AnyPiiResult run_pipeline(Engine & engine, const AnyPiiRequest & request,

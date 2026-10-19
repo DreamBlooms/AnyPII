@@ -52,6 +52,8 @@ find_package(Threads REQUIRED)
 add_executable(anypii
     src/main.cpp
     src/engine.cpp
+    src/nist.cpp
+    src/sys.cpp
     src/unicode.cpp
     src/candidates.cpp
     src/prompt.cpp

@@ -17,6 +17,7 @@ struct EngineOptions {
     int n_threads = 0;
     int n_gpu_layers = 0;
     int max_branches = 32;
+    llama_flash_attn_type flash_attn = LLAMA_FLASH_ATTN_TYPE_AUTO;
 };
 
 // One decision position. label_groups[i] is the set of vocabulary token ids

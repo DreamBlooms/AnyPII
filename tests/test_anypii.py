@@ -110,6 +110,44 @@ def test_contact(c):
     print("ok contact")
 
 
+def test_nist_fast_path(c):
+    req = {
+        "state": {
+            "text": (
+                "SSN 123-45-6789; ITIN 912-70-1234; EIN 12-3456789; "
+                "card 4111 1111 1111 1111; IBAN GB82WEST12345698765432; "
+                "IP 2001:db8::1; DOB 1990-01-31."
+            ),
+            "policy": "Redact all of these.",
+        },
+        "types": {
+            "ssn": {"description": "US Social Security Number", "redact": True},
+            "itin": {"description": "Individual Taxpayer Identification Number", "redact": True},
+            "ein": {"description": "Employer Identification Number", "redact": True},
+            "credit_card": {"description": "Payment card number", "redact": True},
+            "iban": {"description": "International Bank Account Number", "redact": True},
+            "ip_address": {"description": "IP address", "redact": True},
+            "date_of_birth": {"description": "Date of birth", "redact": True},
+        },
+    }
+    r = c.post(req)
+    assert r["usage"]["decodes"] == 0, r["usage"]
+    expected = (
+        "SSN [REDACTED]; ITIN [REDACTED]; EIN [REDACTED]; card [REDACTED]; "
+        "IBAN [REDACTED]; IP [REDACTED]; DOB [REDACTED]."
+    )
+    assert r["redacted_text"] == expected, r["redacted_text"]
+    got = {(s["type"], s["text"]) for s in r["spans"]}
+    assert ("ssn", "123-45-6789") in got
+    assert ("itin", "912-70-1234") in got
+    assert ("ein", "12-3456789") in got
+    assert ("credit_card", "4111 1111 1111 1111") in got
+    assert ("iban", "GB82WEST12345698765432") in got
+    assert ("ip_address", "2001:db8::1") in got
+    assert ("date_of_birth", "1990-01-31") in got
+    print("ok NIST fast path")
+
+
 def test_redact_flip(c):
     req = load("medical.json")
     req["types"]["patient_name"]["redact"] = False
@@ -254,6 +292,7 @@ def main():
     try:
         test_medical(c)
         test_contact(c)
+        test_nist_fast_path(c)
         test_redact_flip(c)
         test_length_mask(c)
         test_auto_redact(c)

@@ -57,16 +57,22 @@ AnyPiiRequest parse_request(const std::string & body) {
         !state["policy"].is_null()) {
         throw std::invalid_argument("state.policy must be a string");
     }
-    if (!j.contains("types") || !j["types"].is_object()) {
-        throw std::invalid_argument("types is required and must be an object");
-    }
-
     AnyPiiRequest req;
     req.text = state["text"].get<std::string>();
     if (state.contains("policy") && state["policy"].is_string()) {
         req.policy = state["policy"].get<std::string>();
     }
 
+    if (j.contains("mode")) {
+        if (!j["mode"].is_string()) throw std::invalid_argument("mode must be a string");
+        req.mode = j["mode"].get<std::string>();
+        if (req.mode != "readout") {
+            throw std::invalid_argument("mode must be \"readout\"");
+        }
+    }
+    if (!j.contains("types") || !j["types"].is_object()) {
+        throw std::invalid_argument("types is required and must be an object");
+    }
     for (auto it = j["types"].begin(); it != j["types"].end(); ++it) {
         const std::string id = it.key();
         const json & v = it.value();
@@ -105,10 +111,6 @@ AnyPiiRequest parse_request(const std::string & body) {
             throw std::invalid_argument(
                 "mask_style must be \"token\", \"length\", \"mask\", or \"typed\"");
         }
-    }
-    if (j.contains("mode")) {
-        if (!j["mode"].is_string()) throw std::invalid_argument("mode must be a string");
-        req.mode = j["mode"].get<std::string>();
     }
     if (j.contains("fallback")) {
         if (!j["fallback"].is_boolean()) {
@@ -199,6 +201,8 @@ void run_server(Engine & engine, const ServerOptions & options) {
             ropts.max_branches_per_decode = options.max_branches;
             ropts.max_text_cp = options.max_text_cp;
             ropts.max_candidates = options.max_candidates;
+            ropts.temperature = options.temperature;
+            ropts.none_margin = options.none_margin;
             AnyPiiResult result = run_pipeline(engine, request, ropts);
             res.set_content(to_json(result).dump(), "application/json; charset=utf-8");
         } catch (const std::invalid_argument & e) {

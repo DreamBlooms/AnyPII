@@ -67,31 +67,33 @@ Everything is **prefill only** — there is no autoregressive loop and no
 
 1. **Candidate proposal.** Character-class runs, the model's own tokenizer
    boundaries and adjacent-token merges, plus regex exceptions for emails, URLs,
-   phone numbers, long digits, ticket/order numbers, IPv4, API keys and case
-   numbers. A language-level prefilter drops single characters, role/action cue
-   fragments, English stop phrases, and disease words when the request defines no
-   disease type. Candidate generation does not depend on a fixed lexicon.
+   phone numbers, SSN/ITIN/EIN, payment cards (Luhn), IBAN (mod-97), IPv4/IPv6,
+   ticket/order numbers, API keys, case numbers and dates of birth, plus generic
+   long digits and high-entropy tokens. A prefilter drops single characters,
+   spans that match a caller type label (words, acronyms, or 2-6 character
+   substrings of the type ids/descriptions), and spans that cross punctuation.
+   Candidate generation does not depend on a fixed lexicon.
 2. **Pass A — type readout.** Every candidate becomes one branch appended to a
    shared evidence prefix (text + policy + entity types). The branch ends at the
    assistant decision position; the next-token logits are restricted to the
    request's type codes plus `none`. A softmax over those logits *is* the type
-   distribution.
+   distribution; a type must also beat `none` by `--none-margin` (default 0.65).
 3. **Boundary arbitration.** Overlapping candidates form components. The top
    candidate and the longest plausible variant are compared in both option
    orders; the winner is extended to a longer complete span when it is a proper
    substring and the weight stays close. This resolves `患者李小明` /
    `李小明` / `患者`.
 4. **Type refinement.** Ambiguous spans get a pairwise type read. The shortlist
-   is driven by the caller's own descriptions: format keywords (email/phone/url/
-   ticket/IP/API key/case), exact digit lengths (`18位`, `16-19位`), and shared
-   2+ character substrings (`辉瑞制药` ↔ `药厂、制药企业`). High-confidence spans
-   and prior-determined types skip this pass.
+   is driven by the caller's own descriptions: exact digit lengths (`18位`,
+   `16-19位`) and shared 2+ character substrings (`辉瑞制药` ↔
+   `药厂、制药企业`). High-confidence spans and prior-determined types skip this
+   pass.
 5. **Redaction.** `redact: true/false` is enforced. Only `"auto"` types run the
    redact/keep readout (Pass C); if every type is explicit, Pass C is skipped
    entirely.
 
-Branches share a decoded evidence prefix: the prefix KV is snapshotted once and
-restored for every pass, and branches are evaluated with multi-sequence decode in
+Branches share a decoded evidence prefix: sequence 0 keeps the prefix KV
+resident across passes, and branches are evaluated with multi-sequence decode in
 batches (`--max-branches`, default 32). No pass is per-token and no pass is
 per-candidate in the sense of one forward per candidate.
 
@@ -131,10 +133,10 @@ The model is not called when the answer is already determined by the request:
 
 | path | condition | model calls |
 | --- | --- | --- |
-| format | regex hit and exactly one type's description matches the format (phone, email, URL, ticket, IP, API key, case number) | 0 |
+| format | regex hit whose NIST format name matches exactly one type id/description (email, phone, SSN, ITIN, EIN, payment card, IBAN, IP, URL, API key, ticket, case number, DOB) | 0 |
 | length | digit candidate whose length appears in exactly one type description (`18位身份证号`, `16-19位银行卡号`) | 0 |
 | high confidence | Pass A margin and probability clear the skip threshold | 0 for type refinement |
-| description prior | a format/length/2+ char description overlap determines the type | 0 for type refinement |
+| description prior | a length or 2+ char description overlap determines the type | 0 for type refinement |
 | `skip_keep_types` | `true` and a component is entirely `redact:false` | 0 for that component |
 | all keep | `skip_keep_types` is true and every type is `redact:false` | 0 total |
 
@@ -190,13 +192,16 @@ the target with `-DCMAKE_CUDA_ARCHITECTURES=89`.
 --host HOST         bind host (default 127.0.0.1)
 --port N            bind port (default 8080)
 --ctx N             context size (default 65536)
---threads N         CPU threads (default: llama.cpp default)
+--threads N         CPU threads (default: physical CPU cores)
 --n-batch N         logical batch size (default 8192)
 --n-ubatch N        physical batch size (default 1024)
 --gpu-layers N      layers to offload (0 = CPU, negative = all; GPU builds)
+--flash-attn MODE   auto|on|off (default auto)
 --max-branches N    max decision branches per decode (default 32)
 --max-text-cp N     max input text length in code points (default 16000)
 --max-candidates N  max candidate spans (default 4000)
+--temperature T     softmax temperature (default 1.0)
+--none-margin M     minimum P(type)-P(none) margin (default 0.65)
 --api-key KEY       require Authorization: Bearer KEY
 --help              show this help
 ```
@@ -251,6 +256,7 @@ python3 tests/test_anypii.py
 The test script starts and stops its own server on a random port. It covers:
 
 - exact medical and contact outputs;
+- NIST regex fast path (SSN, ITIN, EIN, payment card, IBAN, IPv6, date of birth) with zero decodes;
 - `redact` flip;
 - equal-length and typed masking;
 - auto redaction;
@@ -272,9 +278,9 @@ ANYPPI_URL=http://127.0.0.1:8080 python3 tests/test_anypii.py
   (`--max-text-cp`, `--max-candidates`); longer input returns 400.
 - The 0.8B model has limited confidence on very fine-grained custom types;
   clearer descriptions and an appropriate threshold improve results.
-- The cue/stopword prefilter is Chinese/English oriented. It is a proposal prior,
-  not type semantics; adjust the constants in `src/resolve.cpp` for other
-  languages or domains.
+- Candidate generation is tokenizer-first and the prefilter uses only structural
+  signals plus labels derived from the caller's type ids/descriptions. Tune
+  `--none-margin` and `--temperature` to trade precision against recall.
 - `skip_keep_types` reduces unnecessary decisions. It keeps keep labels in Pass A
   to avoid false masking, so the savings are in boundary/type refinement and
   output, not in the type pass.

@@ -1,6 +1,9 @@
 #include "anypii/engine.hpp"
 
+#include "anypii/sys.hpp"
+
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -52,8 +55,15 @@ struct Engine::Impl {
     bool supports_gpu = false;
     std::string model_desc;
     std::unordered_map<std::string, std::vector<int>> group_cache;
+    // Token ids of the shared evidence prefix currently resident in sequence 0.
+    // Empty means no prefix has been decoded yet. The prefix KV is never moved
+    // off device: sequence 0 keeps it, and branch sequences share those cells.
     std::vector<llama_token> prefix_cache_tokens;
-    std::vector<uint8_t> prefix_cache_state;
+    std::string prefix_cache_text;
+    long long decode_calls = 0;
+    double prefill_ms = 0.0;
+    double batch_ms = 0.0;
+    long long batch_tokens = 0;
 
     ~Impl() {
         if (ctx) llama_free(ctx);
@@ -110,8 +120,13 @@ Engine::Engine(const EngineOptions & options) : p(new Impl) {
                                           (uint32_t) std::max(1, options.n_ubatch));
     cparams.n_seq_max = (uint32_t) std::max(2, options.max_branches + 1);
     cparams.kv_unified = true;
-    cparams.n_threads = options.n_threads > 0 ? options.n_threads : 0;
-    cparams.n_threads_batch = cparams.n_threads;
+    cparams.flash_attn_type = options.flash_attn;
+    // llama.cpp defaults to 4 threads (GGML_DEFAULT_N_THREADS), which leaves
+    // most of an SMT machine idle. Use the physical-core count unless the
+    // caller asks for an explicit budget.
+    const int threads = options.n_threads > 0 ? options.n_threads : physical_core_count();
+    cparams.n_threads = threads;
+    cparams.n_threads_batch = threads;
     cparams.no_perf = true;
 
     p->ctx = llama_init_from_model(p->model, cparams);
@@ -309,18 +324,26 @@ std::vector<std::vector<double>> Engine::decode_branches(
     if (branches.empty()) return {};
     if (max_branches_per_decode <= 0) max_branches_per_decode = 1;
 
-    const auto prefix = tokenize(prefix_text, true);
+    const double pre0 = p->prefill_ms;
+    const double batch0 = p->batch_ms;
+    const long long tok0 = p->batch_tokens;
+
+    // The evidence/policy/types prefix is identical across the type, boundary
+    // and redact passes. Compare the source text first so a cache hit also
+    // skips tokenization, then reuse the token ids and resident KV.
+    std::vector<llama_token> fresh_prefix;
+    const bool same_prefix = !p->prefix_cache_tokens.empty() &&
+                             prefix_text == p->prefix_cache_text;
+    if (!same_prefix) fresh_prefix = tokenize(prefix_text, true);
+    const std::vector<llama_token> & prefix =
+        same_prefix ? p->prefix_cache_tokens : fresh_prefix;
     const int P = (int) prefix.size();
     llama_memory_t mem = llama_get_memory(p->ctx);
 
-    // The evidence/policy/types prefix is identical across the type, boundary
-    // and redact passes. Keep its decoded KV and restore it instead of
-    // re-prefilling the same tokens for every pass.
-    if (prefix == p->prefix_cache_tokens && !p->prefix_cache_state.empty()) {
-        llama_memory_seq_rm(mem, 0, -1, -1);
-        llama_state_seq_set_data(p->ctx, p->prefix_cache_state.data(),
-                                 p->prefix_cache_state.size(), 0);
-    } else {
+    // Sequence 0 owns the decoded prefix KV; branch sequences only add their
+    // tails and are removed after each batch, so the prefix stays resident.
+    // Only re-prefill when the prefix actually changes.
+    if (!same_prefix) {
         llama_memory_clear(mem, true);
         const int chunk_max = p->n_batch > 0 ? p->n_batch : std::max(1, P);
         for (int start = 0; start < P; start += chunk_max) {
@@ -334,19 +357,19 @@ std::vector<std::vector<double>> Engine::decode_branches(
                 batch.seq_id[i][0] = 0;
                 batch.logits[i] = 0;
             }
+            const auto t0 = std::chrono::steady_clock::now();
             const int rc = llama_decode(p->ctx, batch);
+            p->prefill_ms += std::chrono::duration<double, std::milli>(
+                                 std::chrono::steady_clock::now() - t0).count();
+            ++p->decode_calls;
             llama_batch_free(batch);
             if (rc != 0) {
                 if (rc == 1) throw std::runtime_error("context is too small for the shared prefix");
                 throw std::runtime_error("llama_decode failed while prefilling the shared prefix");
             }
         }
-        const size_t size = llama_state_seq_get_size(p->ctx, 0);
-        p->prefix_cache_state.resize(size);
-        const size_t got = llama_state_seq_get_data(p->ctx, p->prefix_cache_state.data(),
-                                                    p->prefix_cache_state.size(), 0);
-        p->prefix_cache_state.resize(got);
         p->prefix_cache_tokens = prefix;
+        p->prefix_cache_text = prefix_text;
     }
 
     std::vector<std::vector<llama_token>> all_tails(branches.size());
@@ -357,10 +380,12 @@ std::vector<std::vector<double>> Engine::decode_branches(
         max_tail = std::max(max_tail, (int) all_tails[i].size());
     }
 
-    // Conservative KV budget: seq 0 holds the prefix; every branch sequence
-    // holds a copy of the prefix plus its tail. If the context cannot hold the
-    // requested batch, reduce the batch size rather than failing the request.
-    const int per_branch = P + max_tail + 1;
+    // KV budget: the unified cache keeps the prefix once in sequence 0, and
+    // every branch sequence only owns the cells for its own tail. The prefix
+    // cells are shared through seq_cp, so a batch of n branches needs
+    // P + n * max_tail cells, not n * (P + max_tail). If the context cannot
+    // hold the requested batch, reduce the batch size rather than failing.
+    const int per_branch = max_tail + 1;
     const int safe_branches = (p->n_ctx - P) / std::max(1, per_branch);
     if (safe_branches < 1) {
         throw std::runtime_error(
@@ -403,7 +428,12 @@ std::vector<std::vector<double>> Engine::decode_branches(
             batch.logits[at - 1] = 1;
         }
 
+        const auto tb0 = std::chrono::steady_clock::now();
         const int rc = llama_decode(p->ctx, batch);
+        p->batch_ms += std::chrono::duration<double, std::milli>(
+                            std::chrono::steady_clock::now() - tb0).count();
+        p->batch_tokens += total_tokens;
+        ++p->decode_calls;
         if (rc != 0) {
             llama_batch_free(batch);
             for (int r = 0; r < n; ++r) llama_memory_seq_rm(mem, (llama_seq_id) (r + 1), -1, -1);
@@ -427,6 +457,14 @@ std::vector<std::vector<double>> Engine::decode_branches(
         for (int r = 0; r < n; ++r) {
             llama_memory_seq_rm(mem, (llama_seq_id) (r + 1), -1, -1);
         }
+    }
+
+    if (std::getenv("ANYPPI_TIMING")) {
+        std::cerr << "[decode] prefix_tokens=" << P
+                  << " branches=" << branches.size()
+                  << " batch_tokens=" << (p->batch_tokens - tok0)
+                  << " prefill_ms=" << (p->prefill_ms - pre0)
+                  << " batch_ms=" << (p->batch_ms - batch0) << "\n";
     }
 
     return out;

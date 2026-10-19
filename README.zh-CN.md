@@ -60,30 +60,30 @@ curl http://127.0.0.1:8080/v1/anypii -H 'Content-Type: application/json' -d @exa
 
 1. **候选生成。** 候选来源包括按字符类划分的连续片段、模型自身 tokenizer 给出的
    token 边界与相邻 token 合并结果，以及邮箱、URL、电话、长数字、工单/订单号、IPv4、API key 与
-   案号的正则表达式例外。语言层预过滤会排除单字、职务或动作提示词片段、英文停用短语，以及
-   当前请求未定义疾病类型时的常见疾病词。候选生成不依赖固定词表。
+   案号的正则表达式例外。预过滤会排除单字、与调用方类型标签匹配的片段（类型 id/说明中的
+   单词、缩写或 2-6 字子串），以及跨越标点的片段。候选生成不依赖固定词表。
 2. **Pass A：类型判定。** 每个候选对应一条追加到共享 evidence 前缀（原文、策略
    与类型说明）的分支。分支结束于 assistant 判定位置；next-token logits 被限制到
-   本次请求的类型代码加 `none`。对这些 logits 做 softmax，即得到类型分布。
+   本次请求的类型代码加 `none`。对这些 logits 做 softmax，即得到类型分布；类型还必须
+   比 `none` 高出 `--none-margin`（默认 0.65）。
 3. **边界判定。** 重叠候选构成一个组件。对最强候选与最长合理变体分别按正序和
    反序进行成对比较；若胜者是另一候选的严格子串且两者权重接近，则选择更长的
    完整片段。用于区分 `患者李小明`、`李小明` 与 `患者`。
 4. **类型精修。** 对歧义片段进行类型成对读取。候选类型由调用方提供的说明驱动：
-   格式关键词（email/phone/url/ticket/IP/API key/案号）、精确数字长度（`18位`、
-   `16-19位`）以及 2 字以上公共子串（`辉瑞制药` 与 `药厂、制药企业`）。高置信
-   片段及可由先验确定的类型跳过该阶段。
+   精确数字长度（`18位`、`16-19位`）以及 2 字以上公共子串
+   （`辉瑞制药` 与 `药厂、制药企业`）。高置信片段及可由先验确定的类型跳过该阶段。
 5. **打码判定。** `redact: true/false` 强制生效。仅 `"auto"` 类型执行
    redact/keep readout（Pass C）；若所有类型均为显式 true/false，则完全跳过
    Pass C。
 
-各分支共享已解码的 evidence 前缀；前缀 KV 仅保存一次快照，每个阶段恢复该快照。
+各分支共享已解码的 evidence 前缀；sequence 0 在多个阶段间保留前缀 KV，
 分支按批进行多序列 decode（`--max-branches`，默认 32）。推理不按 token 逐个
 执行，也不为每个候选单独执行前向。
 
 ```mermaid
 flowchart TD
     A["state.text + state.policy + types"] --> B["候选生成<br/>tokenizer 边界 + 相邻 token 合并<br/>+ 正则例外"]
-    B --> C{"语言预过滤<br/>单字、提示词片段、<br/>停用词、疾病词"}
+    B --> C{"预过滤<br/>单字、调用方类型标签、<br/>标点边界"}
     C -->|格式/长度快速路径| D["直接确定类型<br/>0 次模型调用"]
     C -->|保留| E["Pass A：类型读取<br/>共享 evidence 前缀<br/>每个唯一候选一条分支<br/>对类型 + none 做受限 softmax"]
     E --> F["将重叠候选<br/>组合为组件"]
@@ -114,10 +114,10 @@ redacted)` 的多次出现会合并为一个 span。
 
 | 路径 | 条件 | 模型调用 |
 | --- | --- | --- |
-| 格式 | 正则命中，且恰有一个类型说明匹配该格式（电话、邮箱、URL、工单、IP、API key、案号） | 0 |
+| 格式 | 正则命中的 NIST 格式名恰好匹配一个类型 id/说明（邮箱、电话、SSN、ITIN、EIN、支付卡、IBAN、IP、URL、API key、工单、案号、出生日期） | 0 |
 | 长度 | 数字候选的长度恰好出现在唯一类型说明中（`18位身份证号`、`16-19位银行卡号`） | 0 |
 | 高置信 | Pass A 的概率与领先幅度达到跳过阈值 | 类型精修 0 次 |
-| 描述先验 | 格式、长度或 2 字以上描述重叠已足以确定类型 | 类型精修 0 次 |
+| 描述先验 | 长度或 2 字以上描述重叠已足以确定类型 | 类型精修 0 次 |
 | `skip_keep_types` | 为 true 且组件全部由保留类型构成 | 该组件 0 次 |
 | 全部保留 | `skip_keep_types` 为 true 且所有类型均为保留类型 | 总共 0 次 |
 
@@ -169,13 +169,16 @@ CUDA 交叉编译时可用 `-DCMAKE_CUDA_ARCHITECTURES=89` 指定目标架构。
 --host HOST         绑定地址（默认 127.0.0.1）
 --port N            端口（默认 8080）
 --ctx N             上下文大小（默认 65536）
---threads N         CPU 线程数（默认由 llama.cpp 决定）
+--threads N         CPU 线程数（默认使用物理核心数）
 --n-batch N         逻辑批大小（默认 8192）
 --n-ubatch N        物理批大小（默认 1024）
 --gpu-layers N      offload 层数（0 = CPU，负数 = 全部；GPU 构建）
+--flash-attn MODE   auto|on|off（默认 auto）
 --max-branches N    单次 decode 的最大分支数（默认 32）
 --max-text-cp N     输入文本最大 code point 数（默认 16000）
 --max-candidates N  最大候选片段数（默认 4000）
+--temperature T     softmax 温度（默认 1.0）
+--none-margin M     最小 P(type)-P(none) 置信差（默认 0.65）
 --api-key KEY       要求 Authorization: Bearer KEY
 --help              显示帮助
 ```
@@ -229,6 +232,7 @@ python3 tests/test_anypii.py
 测试脚本会在随机端口启动并停止服务，覆盖：
 
 - 医疗与联系信息的精确输出；
+- NIST 正则快速路径（SSN、ITIN、EIN、支付卡、IBAN、IPv6、出生日期），零 decode；
 - `redact` 翻转；
 - 等长遮罩与 typed 遮罩；
 - auto redact；
@@ -250,8 +254,8 @@ ANYPPI_URL=http://127.0.0.1:8080 python3 tests/test_anypii.py
   `--max-candidates` 调整）；超出时返回 400。
 - 0.8B 模型在细粒度自定义类型上的置信度有限；更明确的 description 与合适的
   threshold 可改善结果。
-- 提示词与停用词预过滤偏向中英文，仅作为候选先验，不承担类型语义；其他语言或领域
-  可在 `src/resolve.cpp` 中调整相关常量。
+- 候选生成以 tokenizer 为先，预过滤只使用结构信号和调用方类型 id/说明派生的标签。
+  可通过 `--none-margin` 与 `--temperature` 调整精确率/召回率。
 - `skip_keep_types` 用于减少不必要的判定。它仍在 Pass A 中保留类型标签，以避免误打码，
   因此节省的是边界与类型精修及输出，而非类型判定阶段。
 - 服务默认仅监听本地 HTTP；对外部署时应置于反向代理之后，并启用 `--api-key`。
