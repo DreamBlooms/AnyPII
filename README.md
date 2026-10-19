@@ -175,16 +175,20 @@ If every type is keep, the request returns the original text with zero decodes.
 CJK candidate boundaries use jieba POS tags. By default these tags (and their
 subclasses, because single-character tags match by prefix) are weak:
 
-```text
-v a d p r u m q t f c y e o z l i w b g h k
-```
+`v` (verb), `a` (adjective), `d` (adverb), `p` (preposition), `r` (pronoun),
+`u` (particle), `m` (numeral), `q` (quantifier), `t` (time word), `f` (direction
+word), `c` (conjunction), `y` (modal particle), `e` (interjection), `o`
+(onomatopoeia), `z` (status word), `l` (idiom/expression), `i` (idiom), `w`
+(punctuation), `b` (distinguishing word), `g` (morpheme), `h` (prefix), `k`
+(suffix).
 
 - `v` covers `vd`, `vg`, `vi`, `vn`, `vq`; `u` covers `ud`, `ug`, `uj`, `ul`,
   `uv`, `uz`; `a`, `d`, `m`, `r`, `t` behave the same way.
 - Multi-character custom tags match exactly (`vn` does not weaken other verbs).
-- Kept strong by default: `n`, `ng`, `nr`, `nrfg`, `nrt`, `ns`, `nt`, `nz`
-  (nouns, names, places, organizations), `j` (abbreviations may be entities),
-  `s` (locative words may be addresses), `x` (unknown, often names), and `eng`.
+- Kept strong by default: `n` (noun), `ng` (noun morpheme), `nr` (person name),
+  `nrfg` (person-name subclass), `nrt` (transliterated name), `ns` (place name),
+  `nt` (organization name), `nz` (proper noun), `j` (abbreviation), `s`
+  (locative word), `x` (unknown/non-lexeme, often names), and `eng` (English).
 
 Customize the set at startup:
 
