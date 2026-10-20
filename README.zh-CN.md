@@ -225,6 +225,15 @@ redacted)` 的多次出现会合并为一个 span。
 类型。类型短名单不同时不会去重，但无法覆盖所有同形异义；如果策略要求同一字面量
 按上下文使用不同类型，请关闭去重。
 
+当 boundary 的两个选项类型相同且都是 `keep`，或某个 span 的所有候选类型都是
+`keep` 时，会跳过对应的 boundary/type refinement 分支：保留最长完整 span 和
+Pass A 的最佳类型，不改变打码决定。
+
+`--component-shortlist` 是类型阶段的 A/B 选项。对每个重叠组件只保留最长 span、
+权重最高的选项和最短后缀，并丢弃角色称谓等公共前缀。短 medical 的类型分支从
+16 降到 10（约 2.9s 降到 1.7s）；medical-long 从 48 降到 40（约 9.5s 降到
+8.0s）。默认关闭，因为短前缀有时本身就是合法实体（例如公司名中的地名）。
+
 ## 温度与置信度
 
 `--temperature` 会在 softmax 前缩放受限 logits。它影响 readout 路径、PCD 的
@@ -335,6 +344,7 @@ CUDA 交叉编译时可用 `-DCMAKE_CUDA_ARCHITECTURES=89` 指定目标架构。
 --compact-branches  使用更短的类型分支 prompt（A/B）
 --single-type-orientation  类型精修只使用一个方向（A/B）
 --no-type-refine-dedup  类型精修按每次出现分别判定（A/B）
+--component-shortlist  每个组件只对 top/longest/suffix 做类型判定（A/B）
 --api-key KEY       要求 Authorization: Bearer KEY
 --help              显示帮助
 ```

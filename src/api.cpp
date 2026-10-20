@@ -390,6 +390,7 @@ void run_server(Engine & engine, const ServerOptions & options) {
             ropts.compact_branches = options.compact_branches;
             ropts.single_type_orientation = options.single_type_orientation;
             ropts.type_refine_dedup = options.type_refine_dedup;
+            ropts.component_shortlist = options.component_shortlist;
             ropts.pcd = &pcd;
             AnyPiiResult result = run_pipeline(engine, request, ropts);
             result.result_cache_status = "miss";

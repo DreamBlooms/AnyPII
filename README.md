@@ -262,6 +262,18 @@ prevents dedup when contexts produce different candidate types, but it cannot
 detect every homonym. Disable dedup if your policy assigns context-specific
 types to the same literal.
 
+When both boundary options share the same keep type, or every plausible type
+for a span is keep, those pair/refinement branches are skipped: the engine keeps
+the longest complete span and Pass A's best type. This cannot change the
+redaction decision.
+
+`--component-shortlist` is an A/B option for trimming the type pass. For each
+overlapping component it keeps the longest span, the top-weight option, and the
+shortest suffix, and drops common prefixes such as role titles. Short medical
+drops from 16 to 10 type branches (~2.9s to ~1.7s); medical-long drops from 48
+to 40 branches (~9.5s to ~8.0s). It is off by default because a short prefix can
+be a valid standalone entity (for example a place inside a company name).
+
 ## Temperature and confidence
 
 `--temperature` scales the restricted logits before softmax. It affects the
@@ -384,6 +396,7 @@ the target with `-DCMAKE_CUDA_ARCHITECTURES=89`.
 --compact-branches  shorter readout type-branch prompts (A/B)
 --single-type-orientation  one orientation for type-refinement pairs (A/B)
 --no-type-refine-dedup  decide type refinement per occurrence (A/B)
+--component-shortlist  type-score only top/longest/suffix per component (A/B)
 --api-key KEY       require Authorization: Bearer KEY
 --help              show this help
 ```

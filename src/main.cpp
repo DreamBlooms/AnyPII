@@ -39,6 +39,7 @@ struct Args {
     bool compact_branches = false;
     bool single_type_orientation = false;
     bool type_refine_dedup = true;
+    bool component_shortlist = false;
 };
 
 std::vector<std::string> split_tags(const std::string & text) {
@@ -92,6 +93,7 @@ void usage(const char * argv0) {
         << "  --compact-branches  shorter readout type-branch prompts (A/B)\n"
         << "  --single-type-orientation  use one orientation for type-refinement pairs (A/B)\n"
         << "  --no-type-refine-dedup  decide type refinement per occurrence (A/B)\n"
+        << "  --component-shortlist  type-score only top/longest/suffix per component (A/B)\n"
         << "  --api-key KEY       require Authorization: Bearer KEY\n"
         << "  --help              show this help\n";
 }
@@ -174,6 +176,8 @@ Args parse_args(int argc, char ** argv) {
             a.type_refine_dedup = true;
         } else if (arg == "--no-type-refine-dedup") {
             a.type_refine_dedup = false;
+        } else if (arg == "--component-shortlist") {
+            a.component_shortlist = true;
         } else if (arg == "--api-key") {
             a.api_key = need("--api-key");
         } else {
@@ -234,6 +238,7 @@ int main(int argc, char ** argv) {
         sopts.compact_branches = args.compact_branches;
         sopts.single_type_orientation = args.single_type_orientation;
         sopts.type_refine_dedup = args.type_refine_dedup;
+        sopts.component_shortlist = args.component_shortlist;
         anypii::run_server(engine, sopts);
     } catch (const std::exception & e) {
         std::cerr << "error: " << e.what() << "\n";

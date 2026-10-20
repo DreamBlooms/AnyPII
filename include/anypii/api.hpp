@@ -25,6 +25,7 @@ struct ServerOptions {
     bool compact_branches = false;
     bool single_type_orientation = false;
     bool type_refine_dedup = true;
+    bool component_shortlist = false;
 };
 
 void run_server(Engine & engine, const ServerOptions & options);

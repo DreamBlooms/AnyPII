@@ -1258,6 +1258,69 @@ AnyPiiResult run_pipeline(Engine & engine, const AnyPiiRequest & request,
     }
     if (candidates.empty()) goto finalize;
 
+    if (options.component_shortlist && candidates.size() > 1) {
+        std::vector<int> all(candidates.size());
+        for (size_t i = 0; i < candidates.size(); ++i) all[i] = (int) i;
+        const auto comps = make_components(all, candidates);
+        std::vector<char> keep(candidates.size(), 1);
+        for (const auto & comp : comps) {
+            if (comp.members.size() <= 1) continue;
+            int longest = comp.members[0];
+            int top = comp.members[0];
+            double best = -1.0;
+            int longest_len = candidates[(size_t) longest].end -
+                              candidates[(size_t) longest].start;
+            for (int m : comp.members) {
+                const auto & c = candidates[(size_t) m];
+                const int len = c.end - c.start;
+                double w = c.prior * boundary_factor(c.text) * length_factor(len);
+                if (c.regex_hit) w *= 4.0;
+                if (len <= 1) w *= 0.5;
+                if (len > longest_len) {
+                    longest = m;
+                    longest_len = len;
+                }
+                if (w > best) {
+                    best = w;
+                    top = m;
+                }
+            }
+            // Keep the longest span, its shortest suffix, a regex hit, and a
+            // top-weight option only when it is not merely a prefix. Prefixes
+            // of the longest span are role/title fragments such as 主治医师.
+            int shortest_suffix = -1;
+            int suffix_len = 0;
+            const auto & lc = candidates[(size_t) longest];
+            for (int m : comp.members) {
+                const auto & c = candidates[(size_t) m];
+                if (c.end == lc.end && c.start > lc.start) {
+                    const int len = c.end - c.start;
+                    if (shortest_suffix < 0 || len < suffix_len) {
+                        shortest_suffix = m;
+                        suffix_len = len;
+                    }
+                }
+            }
+            for (int m : comp.members) {
+                if (m == longest || m == shortest_suffix || m == top) continue;
+                if (candidates[(size_t) m].regex_hit) continue;
+                const auto & c = candidates[(size_t) m];
+                if (c.start == lc.start && c.end < lc.end) {
+                    keep[(size_t) m] = 0;
+                }
+            }
+            if (top != longest && candidates[(size_t) top].regex_hit == false) {
+                const auto & tc = candidates[(size_t) top];
+                if (tc.start == lc.start && tc.end < lc.end) keep[(size_t) top] = 0;
+            }
+        }
+        std::vector<Candidate> shortlist;
+        for (size_t i = 0; i < candidates.size(); ++i) {
+            if (keep[i]) shortlist.push_back(candidates[i]);
+        }
+        candidates.swap(shortlist);
+    }
+
     {
     // ---------- Pass A: one shared evidence prefix, one branch per unique text ----------
     std::vector<CandScore> scores(candidates.size());
@@ -1441,6 +1504,16 @@ AnyPiiResult run_pipeline(Engine & engine, const AnyPiiRequest & request,
                 opts[1] = opts[(size_t) longest];
                 opts.resize(2);
             } else {
+                opts.resize(1);
+            }
+            // If both options carry the same keep type, the pair decode cannot
+            // change the redaction decision. Keep the longest complete span.
+            const bool nested = opts.size() == 2 &&
+                (opts[1].text.find(opts[0].text) != std::string::npos ||
+                 opts[0].text.find(opts[1].text) != std::string::npos);
+            if (nested && opts[0].type == opts[1].type &&
+                table.types[(size_t) opts[0].type].redact == RedactMode::Keep) {
+                opts[0] = opts[1];
                 opts.resize(1);
             }
         }
@@ -1661,6 +1734,29 @@ AnyPiiResult run_pipeline(Engine & engine, const AnyPiiRequest & request,
         }
 
         if (cs.bestp >= 0.80 && cs.bestp - cs.secondp >= 0.30) {
+            direct_hit(si, cs.best);
+            continue;
+        }
+
+        // Pairwise refinement only changes the type label here, not the
+        // redaction decision, when every plausible type is keep. Use Pass A's
+        // best type and skip those branches.
+        bool all_keep = cs.best >= 0 &&
+            table.types[(size_t) cs.best].redact == RedactMode::Keep;
+        if (all_keep && cs.second >= 0 && cs.secondp >= 0.05 &&
+            table.types[(size_t) cs.second].redact != RedactMode::Keep) {
+            all_keep = false;
+        }
+        if (all_keep) {
+            for (int t = 0; t < type_count; ++t) {
+                if (table.types[(size_t) t].redact != RedactMode::Keep &&
+                    lexical_type_bonus(span_text, table.types[(size_t) t]) > 1.0) {
+                    all_keep = false;
+                    break;
+                }
+            }
+        }
+        if (all_keep) {
             direct_hit(si, cs.best);
             continue;
         }
