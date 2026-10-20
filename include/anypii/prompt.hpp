@@ -93,6 +93,7 @@ BranchSet build_verify_branches(Engine & engine, const TypeTable & table,
                                 const std::vector<VerifyItem> & items);
 
 BranchSet build_pair_branches(Engine & engine, const AnyPiiRequest & request,
-                              const std::vector<PairChoice> & pairs);
+                              const std::vector<PairChoice> & pairs,
+                              bool reverse = true);
 
 } // namespace anypii

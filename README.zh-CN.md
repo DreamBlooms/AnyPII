@@ -211,8 +211,9 @@ redacted)` 的多次出现会合并为一个 span。
 
 `--compact-branches` 会缩短每个候选的类型分支 prompt，默认关闭，仅用于 A/B。
 当前测试中 medical 从约 3.7–4.0s 降到约 3.3s，medical-long 从约 12.8–14.4s
-降到约 9.8s，但有一次 legal 的 person span 丢失。除非已验证自己的类型集，
-生产环境建议保持标准布局。
+降到约 9.8s，但有一次 legal 的 person span 丢失。`--single-type-orientation`
+可将类型精修分支减半（medical-long 约 13.4s），但会改变部分长文档 span。除非
+已验证自己的类型集，生产环境建议保持标准布局。
 
 ## 温度与置信度
 
@@ -322,6 +323,7 @@ CUDA 交叉编译时可用 `-DCMAKE_CUDA_ARCHITECTURES=89` 指定目标架构。
 --result-cache-entries N  缓存相同请求的结果数（默认 64）
 --result-cache-bytes BYTES  结果缓存预算（默认 64 MiB）
 --compact-branches  使用更短的类型分支 prompt（A/B）
+--single-type-orientation  类型精修只使用一个方向（A/B）
 --api-key KEY       要求 Authorization: Bearer KEY
 --help              显示帮助
 ```

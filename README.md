@@ -243,8 +243,9 @@ caches; only the result cache skips all decoding.
 `--compact-branches` shortens the per-candidate type-branch prompt. It is an
 A/B option, off by default. In current tests it reduced medical from ~3.7–4.0s
 to ~3.3s and medical-long from ~12.8–14.4s to ~9.8s, but lost the legal person
-span in one run. Keep the standard layout for production unless you have
-verified your own type set.
+span in one run. `--single-type-orientation` halves type-refinement branches
+(medical-long ~13.4s) but changed several long-document spans. Keep the standard
+layout for production unless you have verified your own type set.
 
 ## Temperature and confidence
 
@@ -366,6 +367,7 @@ the target with `-DCMAKE_CUDA_ARCHITECTURES=89`.
 --result-cache-entries N  cached identical responses (default 64)
 --result-cache-bytes BYTES  result cache budget (default 64 MiB)
 --compact-branches  shorter readout type-branch prompts (A/B)
+--single-type-orientation  one orientation for type-refinement pairs (A/B)
 --api-key KEY       require Authorization: Bearer KEY
 --help              show this help
 ```

@@ -1704,7 +1704,8 @@ AnyPiiResult run_pipeline(Engine & engine, const AnyPiiRequest & request,
     }
 
     {
-        BranchSet set = build_pair_branches(engine, request, type_pairs);
+        BranchSet set = build_pair_branches(engine, request, type_pairs,
+                                            !options.single_type_orientation);
         const auto probs = engine.decode_branches(set.prefix, set.branches,
                                                   options.max_branches_per_decode,
                                                   options.temperature);
@@ -1713,9 +1714,15 @@ AnyPiiResult run_pipeline(Engine & engine, const AnyPiiRequest & request,
 
         for (size_t k = 0; k < type_meta.size(); ++k) {
             const int pi = type_meta[k].pair_index;
-            if (pi < 0 || 2 * pi + 1 >= (int) probs.size()) continue;
-            const auto & pf = probs[2 * pi];
-            const auto & pr = probs[2 * pi + 1];
+            const bool single = options.single_type_orientation;
+            if (pi < 0) continue;
+            if (single) {
+                if (pi >= (int) probs.size()) continue;
+            } else if (2 * pi + 1 >= (int) probs.size()) {
+                continue;
+            }
+            const auto & pf = probs[(size_t) pi];
+            const auto & pr = single ? pf : probs[(size_t) (2 * pi + 1)];
             const size_t n = pf.size();
             if (n == 0 || pr.size() != n) continue;
             const int si = type_meta[k].selected;
@@ -1726,7 +1733,7 @@ AnyPiiResult run_pipeline(Engine & engine, const AnyPiiRequest & request,
             std::vector<double> vals(n, 0.0);
             double vsum = 0.0;
             for (size_t j = 0; j < n; ++j) {
-                double v = 0.5 * (pf[j] + pr[n - 1 - j]);
+                double v = single ? pf[j] : 0.5 * (pf[j] + pr[n - 1 - j]);
                 if (j < ts.size() && ts[j] >= 0) {
                     v *= lexical_type_bonus(span_text, table.types[(size_t) ts[j]]);
                     v *= length_type_bonus(

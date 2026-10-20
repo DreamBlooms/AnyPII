@@ -451,7 +451,8 @@ BranchSet build_verify_branches(Engine & engine, const TypeTable & table,
 }
 
 BranchSet build_pair_branches(Engine & engine, const AnyPiiRequest & request,
-                              const std::vector<PairChoice> & pairs) {
+                              const std::vector<PairChoice> & pairs,
+                              bool reverse) {
     BranchSet set;
     set.prefix = chatml_prefix(shared_body(request, build_type_table(request.types)));
     static const std::string pool = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -475,7 +476,7 @@ BranchSet build_pair_branches(Engine & engine, const AnyPiiRequest & request,
 
     for (const auto & pair : pairs) {
         add(pair, false);
-        add(pair, true);
+        if (reverse) add(pair, true);
     }
     return set;
 }

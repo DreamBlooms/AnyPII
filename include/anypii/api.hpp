@@ -23,6 +23,7 @@ struct ServerOptions {
     int result_cache_entries = 64;
     size_t result_cache_bytes = 64ull * 1024 * 1024;
     bool compact_branches = false;
+    bool single_type_orientation = false;
 };
 
 void run_server(Engine & engine, const ServerOptions & options);

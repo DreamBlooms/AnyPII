@@ -22,6 +22,7 @@ struct ResolveOptions {
     int none_margin_max_len = 4;
     double none_margin_redact = 0.20;
     bool compact_branches = false;
+    bool single_type_orientation = false;
     PcdDecoder * pcd = nullptr;
 };
 
