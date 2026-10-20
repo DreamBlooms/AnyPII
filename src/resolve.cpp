@@ -1475,6 +1475,13 @@ AnyPiiResult run_pipeline(Engine & engine, const AnyPiiRequest & request,
                 const std::string sig = pair_signature(pc);
                 auto it = pair_cache.find(sig);
                 int pi = -1;
+                if (std::getenv("ANYPPI_DEBUG")) {
+                    std::cerr << "[PB] comp=" << ci << " a=[" << opts[(size_t) a].text
+                              << "](" << table.types[(size_t) opts[(size_t) a].type].id
+                              << ") b=[" << opts[(size_t) b].text << "]("
+                              << table.types[(size_t) opts[(size_t) b].type].id
+                              << ")\n";
+                }
                 if (it == pair_cache.end()) {
                     pi = (int) pairs.size();
                     pair_cache.emplace(sig, pi);
@@ -1608,6 +1615,7 @@ AnyPiiResult run_pipeline(Engine & engine, const AnyPiiRequest & request,
     std::vector<TypeMeta> type_meta;
     std::vector<int> pair_selected;
     std::map<std::string, int> type_pair_cache;
+    std::map<std::string, int> type_text_cache;
 
     auto type_overlap = [&](const Utf8Text & span, int t) {
         return std::max(
@@ -1674,6 +1682,16 @@ AnyPiiResult run_pipeline(Engine & engine, const AnyPiiRequest & request,
             if (lexical_type_bonus(span_text, table.types[(size_t) t]) > 1.0) add_type(t);
         }
 
+        std::string text_key = selected[(size_t) si].text;
+        for (int t : cand_types) text_key += "|" + table.types[(size_t) t].id;
+        if (options.type_refine_dedup) {
+            auto cached = type_text_cache.find(text_key);
+            if (cached != type_text_cache.end()) {
+                type_meta.push_back({si, cand_types, cached->second});
+                continue;
+            }
+        }
+
         PairChoice pc;
         for (int t : cand_types) {
             pc.choices.push_back(table.types[(size_t) t].id + ": " +
@@ -1693,6 +1711,11 @@ AnyPiiResult run_pipeline(Engine & engine, const AnyPiiRequest & request,
         const std::string sig = pair_signature(pc);
         auto it = type_pair_cache.find(sig);
         int pi = -1;
+        if (std::getenv("ANYPPI_DEBUG")) {
+            std::cerr << "[TP] span=[" << selected[(size_t) si].text << "] types=";
+            for (int t : cand_types) std::cerr << table.types[(size_t) t].id << ",";
+            std::cerr << "\n";
+        }
         if (it == type_pair_cache.end()) {
             pi = (int) type_pairs.size();
             type_pair_cache.emplace(sig, pi);
@@ -1700,6 +1723,7 @@ AnyPiiResult run_pipeline(Engine & engine, const AnyPiiRequest & request,
         } else {
             pi = it->second;
         }
+        if (options.type_refine_dedup) type_text_cache[text_key] = pi;
         type_meta.push_back({si, cand_types, pi});
     }
 

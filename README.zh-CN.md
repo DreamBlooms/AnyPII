@@ -82,7 +82,9 @@ curl -s http://127.0.0.1:8080/v1/anypii \
    IPv4/IPv6、NPI/MBI/DEA/VIN、工单/订单号、API key、案号与出生日期等正则例外。
    预过滤会排除单字、与调用方类型标签匹配的片段（类型 id/说明中的单词、缩写或
    2-6 字子串）、跨越标点的片段、紧邻结构化正则值的短词，以及首/尾/内部词性为
-   动词、助词、介词、副词、数词、时间词等的 CJK 片段。拉丁多词姓名仅在两个词都
+   动词、助词、介词、副词、数词、时间词等的 CJK 片段。合并后的 CJK 片段中，
+   `x`/`nr`/`nrfg` 词性只能出现在最后一个词；这会去掉 `陈思远体温`、`林婉清建议`
+   等过度合并，同时保留 `主治医师林婉清`。拉丁多词姓名仅在两个词都
    大写时合并（Alice Johnson、Acme Corp）。jieba 仅作为候选先验，不承担最终分类。
 2. **Pass A：类型判定。** 每个候选对应一条追加到共享 evidence 前缀（原文、策略
    与类型说明）的分支。分支结束于 assistant 判定位置；next-token logits 被限制到
@@ -215,6 +217,14 @@ redacted)` 的多次出现会合并为一个 span。
 可将类型精修分支减半（medical-long 约 13.4s），但会改变部分长文档 span。除非
 已验证自己的类型集，生产环境建议保持标准布局。
 
+类型精修会按重复文本加候选类型短名单去重，复用第一次判定，使同一实体只得到一个
+类型与打码决定。该行为默认开启；需要逐次按上下文判定时使用
+`--no-type-refine-dedup`。在 medical-long 示例中，分支数从 62 降到 48（约
+12.4s 降到约 9.8s），类型精修对数从 10 降到 3，同时 5 处 `阿莫西林` 和 4 处
+`出院` 的判定保持一致。风险在于同形异义词：相同文本在不同角色下可能需要不同
+类型。类型短名单不同时不会去重，但无法覆盖所有同形异义；如果策略要求同一字面量
+按上下文使用不同类型，请关闭去重。
+
 ## 温度与置信度
 
 `--temperature` 会在 softmax 前缩放受限 logits。它影响 readout 路径、PCD 的
@@ -324,6 +334,7 @@ CUDA 交叉编译时可用 `-DCMAKE_CUDA_ARCHITECTURES=89` 指定目标架构。
 --result-cache-bytes BYTES  结果缓存预算（默认 64 MiB）
 --compact-branches  使用更短的类型分支 prompt（A/B）
 --single-type-orientation  类型精修只使用一个方向（A/B）
+--no-type-refine-dedup  类型精修按每次出现分别判定（A/B）
 --api-key KEY       要求 Authorization: Bearer KEY
 --help              显示帮助
 ```

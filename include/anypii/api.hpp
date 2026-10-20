@@ -24,6 +24,7 @@ struct ServerOptions {
     size_t result_cache_bytes = 64ull * 1024 * 1024;
     bool compact_branches = false;
     bool single_type_orientation = false;
+    bool type_refine_dedup = true;
 };
 
 void run_server(Engine & engine, const ServerOptions & options);

@@ -38,6 +38,7 @@ struct Args {
     size_t result_cache_bytes = 64ull * 1024 * 1024;
     bool compact_branches = false;
     bool single_type_orientation = false;
+    bool type_refine_dedup = true;
 };
 
 std::vector<std::string> split_tags(const std::string & text) {
@@ -90,6 +91,7 @@ void usage(const char * argv0) {
         << "  --result-cache-bytes BYTES  result cache budget (default 64 MiB)\n"
         << "  --compact-branches  shorter readout type-branch prompts (A/B)\n"
         << "  --single-type-orientation  use one orientation for type-refinement pairs (A/B)\n"
+        << "  --no-type-refine-dedup  decide type refinement per occurrence (A/B)\n"
         << "  --api-key KEY       require Authorization: Bearer KEY\n"
         << "  --help              show this help\n";
 }
@@ -168,6 +170,10 @@ Args parse_args(int argc, char ** argv) {
             a.compact_branches = true;
         } else if (arg == "--single-type-orientation") {
             a.single_type_orientation = true;
+        } else if (arg == "--type-refine-dedup") {
+            a.type_refine_dedup = true;
+        } else if (arg == "--no-type-refine-dedup") {
+            a.type_refine_dedup = false;
         } else if (arg == "--api-key") {
             a.api_key = need("--api-key");
         } else {
@@ -227,6 +233,7 @@ int main(int argc, char ** argv) {
         sopts.result_cache_bytes = args.result_cache_bytes;
         sopts.compact_branches = args.compact_branches;
         sopts.single_type_orientation = args.single_type_orientation;
+        sopts.type_refine_dedup = args.type_refine_dedup;
         anypii::run_server(engine, sopts);
     } catch (const std::exception & e) {
         std::cerr << "error: " << e.what() << "\n";

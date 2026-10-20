@@ -97,9 +97,12 @@ Everything is **prefill only** — there is no autoregressive loop and no
    substrings of the type ids/descriptions), spans that cross punctuation,
    short words immediately adjacent to a structured regex value, and CJK spans
    whose first/last/interior POS is a verb, particle, preposition, adverb,
-   numeral, time word, and so on. Latin multi-word names are merged only when
-   both words are capitalized (Alice Johnson, Acme Corp). Candidate generation
-   uses jieba as a proposal prior, not as the final classifier.
+   numeral, time word, and so on. In a merged CJK span, an `x`/`nr`/`nrfg`
+   token is allowed only as the final word; this trims `陈思远体温` and
+   `林婉清建议` while keeping `主治医师林婉清`. Latin multi-word names are
+   merged only when both words are capitalized (Alice Johnson, Acme Corp).
+   Candidate generation uses jieba as a proposal prior, not as the final
+   classifier.
 2. **Pass A — type readout.** Every candidate becomes one branch appended to a
    shared evidence prefix (text + policy + entity types). The branch ends at the
    assistant decision position; the next-token logits are restricted to the
@@ -247,6 +250,18 @@ span in one run. `--single-type-orientation` halves type-refinement branches
 (medical-long ~13.4s) but changed several long-document spans. Keep the standard
 layout for production unless you have verified your own type set.
 
+Type-refinement decisions are deduplicated by repeated text plus the candidate
+type shortlist. The first decision is reused, so repeated entities receive one
+type and redaction decision. This is on by default; use
+`--no-type-refine-dedup` for per-occurrence refinement. On the medical-long
+example it reduced 62 branches to 48 (~12.4s to ~9.8s) and type-refinement
+pairs from 10 to 3, while keeping all five `阿莫西林` mentions and all four
+`出院` mentions consistent. The risk is context-dependent homonyms: identical
+text can deserve different types in different roles. The shortlist guard
+prevents dedup when contexts produce different candidate types, but it cannot
+detect every homonym. Disable dedup if your policy assigns context-specific
+types to the same literal.
+
 ## Temperature and confidence
 
 `--temperature` scales the restricted logits before softmax. It affects the
@@ -368,6 +383,7 @@ the target with `-DCMAKE_CUDA_ARCHITECTURES=89`.
 --result-cache-bytes BYTES  result cache budget (default 64 MiB)
 --compact-branches  shorter readout type-branch prompts (A/B)
 --single-type-orientation  one orientation for type-refinement pairs (A/B)
+--no-type-refine-dedup  decide type refinement per occurrence (A/B)
 --api-key KEY       require Authorization: Bearer KEY
 --help              show this help
 ```

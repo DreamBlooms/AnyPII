@@ -160,6 +160,9 @@ std::vector<Candidate> propose_candidates(const Utf8Text & text, Engine & engine
             const bool seg_ok = segment_cjk(run_text, seg);
             if (seg_ok) {
                 const int nw = (int) seg.size();
+                auto is_person_like = [](const std::string & pos) {
+                    return pos == "x" || pos == "nr" || pos == "nrfg";
+                };
                 auto pos_ok = [&](int a, int b) {
                     if (a < 0 || b < a || b >= nw) return true;
                     if (weak_pos(seg[(size_t) a].pos) || weak_pos(seg[(size_t) b].pos)) {
@@ -167,6 +170,12 @@ std::vector<Candidate> propose_candidates(const Utf8Text & text, Engine & engine
                     }
                     for (int k = a + 1; k < b; ++k) {
                         if (weak_pos(seg[(size_t) k].pos)) return false;
+                    }
+                    // A person-like token must be the final word of the span.
+                    // This trims merges such as 陈思远体温 / 林婉清建议 while
+                    // keeping 主治医师林婉清 and 责任护士周雅琴.
+                    for (int k = a; k < b; ++k) {
+                        if (is_person_like(seg[(size_t) k].pos)) return false;
                     }
                     return true;
                 };
