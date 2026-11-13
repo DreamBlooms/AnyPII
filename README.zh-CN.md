@@ -324,7 +324,7 @@ token 建立一个字段，选项为 `copy` 或 `REDACTED`，连续的 REDACTED 
 
 ## 构建
 
-需要 CMake 3.20+、Git 和支持 C++20 的编译器。官方 llama.cpp **v0.8.0** 和
+需要 CMake 3.20+、Git 和支持 C++20 的编译器。官方 llama.cpp **v0.9.0** 和
 cppjieba 已作为子模块固定，无需额外检出。cppjieba 词典位于
 `third_party/cppjieba/dict`；可用 `ANYPPI_JIEBA_DICT` 指向其他词典目录。
 

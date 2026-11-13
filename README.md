@@ -366,7 +366,7 @@ Use `readout` or `pcd` instead.
 ## Build
 
 Requires CMake 3.20+, Git, and a C++20 compiler. The official llama.cpp
-**v0.8.0** and cppjieba are pinned as submodules, so no external checkout is
+**v0.9.0** and cppjieba are pinned as submodules, so no external checkout is
 needed. cppjieba dictionaries ship in `third_party/cppjieba/dict`; set
 `ANYPPI_JIEBA_DICT` to use another dictionary directory.
 
