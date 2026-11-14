@@ -7,7 +7,7 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
-# Official llama.cpp v0.9.0, pinned as the third_party/llama.cpp submodule.
+# Official llama.cpp v1.0.0, pinned as the third_party/llama.cpp submodule.
 # AnyPII only uses the public llama.h API, so a different checkout can be
 # supplied with -DLLAMA_DIR=... when needed.
 set(LLAMA_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/llama.cpp"
